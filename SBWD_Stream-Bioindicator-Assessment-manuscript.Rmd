@@ -14,7 +14,7 @@ knitr::opts_chunk$set(echo = FALSE)
   - Part 1: General Data Prep
   - Part 2: Invert Community Data Analysis (2020-2023)
     - Section A: Defoliation and Mortality within our sites 
-    - Section B: Comparison to Nondefoliated CABIN Watersheds
+    - Section B: Comparison to undefoliated CABIN Watersheds
 - CABIN reference watersheds were delineated in the rmd file: CABIN_watershed_delineation.rmd 
 
 ```{r pull in data}
@@ -857,7 +857,7 @@ chiro_mort
 ```
   
 
-# Section B: Comparison to Nondefoliated CABIN Watersheds
+# Section B: Comparison to undefoliated CABIN Watersheds
 - CABIN data was downloaded from the online database  https://www.canada.ca/en/environment-climate-change/services/canadian-aquatic-biomonitoring-network/database.html
 - details on the download process/filters/watershed delineation can be found in the rmd file: CABIN_watershed_delineation.rmd 
 
@@ -1249,7 +1249,7 @@ inverts1_refs_wide <- inverts1_refs %>%
 
 metadata_refs <- inverts1_refs_wide  %>%
   dplyr::select(sample) %>%
-  mutate(Site_Type = "Non-defoliated")
+  mutate(Site_Type = "Undefoliated")
 
 all_metadata <- rbind(metadata_defo, metadata_refs)
 
@@ -1374,7 +1374,7 @@ inverts_refs_gamma <- invert_refs %>%
   dplyr::select(Family, site, year, count) %>%
   group_by(Family) %>%
   summarize(count = sum(count)) %>%
-  mutate(Site_Type = "Non-defoliated")
+  mutate(Site_Type = "Undefoliated")
 
 # now how many unique to ref or defo
 
@@ -1442,28 +1442,28 @@ unique(inverts_gamma_all23$Family) # 70 familes
 gamma_df <- data.frame(
   #year = rep(c(2021, 2022, 2023), each = 3),
   count = c(4, 45, 23),
-  Category = rep(c("Unique to Defoliated", "Unique to Non-Defoliated", "Shared"), times = 1)
+  Category = rep(c("Unique to Defoliated", "Unique to Undefoliated", "Shared"), times = 1)
 )
 
 #gamma_df <- data.frame(
 #  year = rep(c(2021, 2022, 2023), each = 3),
 #  count = c(2, 46, 24, 2, 45, 25, 0, 46, 24),
-#  Category = rep(c("Unique to Defoliated", "Unique to Non-Defoliated", "Shared"), times = 3))
+#  Category = rep(c("Unique to Defoliated", "Unique to Undefoliated", "Shared"), times = 3))
 
 
 #gamma_df$year <- as.factor(gamma_df$year)
 
-gamma_df$Category <- factor(gamma_df$Category, levels = c("Unique to Defoliated", "Unique to Non-Defoliated",  "Shared" ))
+gamma_df$Category <- factor(gamma_df$Category, levels = c("Unique to Defoliated", "Unique to Undefoliated",  "Shared" ))
 
 # ok now need to plot this!
 #position = "stack", stat = "identity"
 
-gammaplot <- ggplot(gamma_df, aes(x=Category, y=count, fill = Category)) + geom_bar(stat = "identity") + theme_bw() + guides(fill=guide_legend(title="Number of Families"))  + scale_fill_manual(name = "Number of Families", values = c("Unique to Defoliated" = "#440154", "Unique to Non-Defoliated" = "#b5de2b", Shared = "grey")) + 
+gammaplot <- ggplot(gamma_df, aes(x=Category, y=count, fill = Category)) + geom_bar(stat = "identity") + theme_bw() + guides(fill=guide_legend(title="Number of Families"))  + scale_fill_manual(name = "Number of Families", values = c("Unique to Defoliated" = "#440154", "Unique to Undefoliated" = "#b5de2b", Shared = "grey")) + 
   scale_x_discrete(
     labels = c(
       "Unique to Defoliated" = "Defoliated Only",
-      "Unique to Non-Defoliated" = "Non-defoliated Only",
-      "Shared" = "Present in Both Groups")) + ylab("Number of Families") + xlab("Presence-Absence per Group") +  theme_minimal(base_size = 14) + theme(legend.position = "none")
+      "Unique to Undefoliated" = "Undefoliated Only",
+      "Shared" = "Present in Both Groups")) + ylab("Number of Families") + xlab("Presence-Absence per Group") +  theme_minimal(base_size = 16) + theme(legend.position = "none")
 
 gammaplot
 
@@ -1592,13 +1592,13 @@ daa_plot <- ggplot(sig, aes(x = log_or, y = reorder(Taxon, log_or), fill = Direc
   ) +
   scale_y_discrete(name = "Significant Taxa (p <0.05)") +
   scale_fill_manual(values = c("Defo" = "#440154", "Non" = "#b5de2b"), 
-                        labels = c("Defo" = "Defoliated", "Non" = "Non-defoliated")) +
+                        labels = c("Defo" = "Defoliated", "Non" = "Undefoliated")) +
   labs(
   #  title = "Significant Taxa by Fisher's Exact Test",
   # subtitle = paste("FDR-adjusted p-value <", alpha),
     fill = "Site Type"
   ) +
-  theme_minimal(base_size = 14) +  theme(legend.position = "bottom")
+  theme_minimal(base_size = 16) +  theme(legend.position = "bottom")
 
 legend_b <- get_legend(daa_plot)
 
