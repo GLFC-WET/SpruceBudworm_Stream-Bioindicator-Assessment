@@ -1,0 +1,1637 @@
+---
+title: "SBWD CABIN"
+author: "Madison McCaig"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+-  This script contains the data analyses for the paper "Assessment of the impacts of defoliation on freshwaters to inform outbreak management strategies in boreal forests"
+- it is organized into two main sections:
+  - Part 1: General Data Prep
+  - Part 2: Invert Community Data Analysis (2020-2023)
+    - Section A: Defoliation and Mortality within our sites 
+    - Section B: Comparison to Nondefoliated CABIN Watersheds
+- CABIN reference watersheds were delineated in the rmd file: CABIN_watershed_delineation.rmd 
+
+```{r pull in data}
+# update path to data 
+data_dir <-  "C:/Users/mmccaig/OneDrive - NRCan RNCan/Documents/GitHub/SpruceBudworm_Stream-Bioindicator-Assessment/data/"
+
+defoliation_data <- readRDS(paste0(data_dir, "defoliation_data.rds"))
+
+watershed_characteristics <- readRDS(paste0(data_dir, "watershed_characteristics.rds"))
+
+streams <- readRDS(paste0(data_dir, "streams.rds"))
+
+library(readr)
+LOQ_waterchem <- read_csv(paste0(data_dir, "LOQ_waterchem.csv"))
+
+field <- readRDS(paste0(data_dir, "field.rds"))
+
+leafpacks <- readRDS(paste0(data_dir, "leafpacks.rds"))
+
+invert_metadata <- readRDS(paste0(data_dir, "invert_metadata.rds"))
+
+stage <- readRDS(paste0(data_dir, "stage.rds"))
+
+inverts <- readRDS(paste0(data_dir, "/inverts.RDS"))
+
+#path to watershedEcolB personal workspace
+
+McCaig_SBWD <- "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD"
+
+```
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(vegan)
+library(ggpubr)
+library(viridisLite)
+library(viridis)
+library(indicspecies)
+library(scales)
+library(ggnewscale)
+library(rdacca.hp)
+library(lme4)
+library(car)
+library(MuMIn)
+library(ggpattern)
+library(performance)
+library(see)
+library(corrplot)
+library("psych")
+```
+
+# Part 1 General Data Prep 
+
+### Stream Habitat Data
+- note that data was checked for the proportion above detection limit and any paramters with more than 50% of values below DL were removed (Al, Fe, NH4, SRP, Mn, Ni, Cd, and Pb did not meet cutoff and were removed). Replaced any remaining values below the DL with 1/2DL)
+- the output for this check can be found here: "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD"SBWD_Proportion of water chem above DL_2019-2023" 
+- calculate full season average and also pull the closest measurements to the kicks in Sept
+
+```{r waterchem, message = FALSE, warning = FALSE}
+#pull in water chem, keeping algae with waterchem even though its not really "chem"
+
+#select all except dom
+waterchem <- streams %>%
+        dplyr::select(c(1,2, 3, 14:60))
+waterchem$year <- as.factor(waterchem$year)
+
+waterchem$site <- as.factor(waterchem$site)
+
+#Al, Fe, NH4, SRP, Mn, Ni, Cd, and Pb did not meet 50% above DL cutoff and were removed
+# replaced any remaining values below the DL with 1/2DL
+
+# also remove the W_DOC and W DIC (the values from both labs are so similar, it doesn't matter which we use)
+#(wet lab measured DOC and DIC)
+
+waterchem <- waterchem %>%
+  dplyr::select(-"Al.mgL", -"Fe.mgL", -"NH4.mgL", -"SRP.mgL", -"Mn.mgL", -"Ni.mgL", -"Cd.mgL", -"Pb.mgL", -"As.mgL", -"B.mgL", -"Co.mgL", -"Cr.mgL", -"Mo.mgL", -"Se.mgL", -"W_DOC.mgL")
+
+# remove the below DL for W_TDN
+waterchem$W_TDN.mgL<- ifelse(grepl("DL",waterchem$W_TDN.mgL), str_sub(waterchem$W_TDN.mgL, end=-15), waterchem$W_TDN.mgL)
+
+waterchem$W_TDN.mgL <- as.numeric(waterchem$W_TDN.mgL)
+
+#replace anything below LOQ with 1/2 LOQ
+waterchem_long <- waterchem %>% 
+ pivot_longer(cols= (where(is.numeric)), names_to="parameter") %>%
+  full_join(LOQ_waterchem,by="parameter") %>%
+ mutate(across(value, ~ifelse(.<LOQ, replace_value, .))) %>% 
+ dplyr::select(-c(LOQ,replace_value)) 
+
+#remove blank rows at the end, these are appearing because they are in the LOQ file but have been filtered out of the waterchem file
+waterchem_long <- waterchem_long %>% drop_na(site)
+
+#checked for outliers using boxplots
+#Outlier at L10 on 2021-06-13 for all 4 algal biomass parameters were removed - exreme values
+library(naniar)
+waterchem_long <- waterchem_long %>%
+  replace_with_na(replace = list(value = c(23.4248000, 12.088400, 7.91560000, 3.420800)))
+
+# pivot wide, join the test mark column with the regular column
+
+waterchem_wide <- waterchem_long %>%
+pivot_wider(names_from = parameter, values_from = value)
+
+waterchem_wide <- waterchem_wide %>%
+  mutate(TP = coalesce(TP.mgL, TP.mgL_tm, W_TPO4.mgL)) %>% #merges all 3 TP methods
+  mutate(Cl = coalesce(Cl.mgL, Cl.mgL_tm)) %>%
+  mutate(SO4 = coalesce(SO4.mgL, SO4.mgL_tm)) %>%
+mutate(SiO2 = coalesce(SiO2.mgL, SiO2.mgL_tm, W_SiO2.mgL)) %>% #merges all 3 Si methods
+mutate(DIC = ifelse(year == "2020" | year == "2021"  | year == "2022", DIC.mgL, W_DIC.mgL)) %>% #takes DIC from Wet lab for 2023 and 2024, chem lab before that 
+mutate(TN = ifelse(year == "2020" | year == "2021", TN.mgL, W_TDN.mgL)) %>%
+  dplyr::select(-TP.mgL, -TP.mgL_tm, -Cl.mgL, - Cl.mgL_tm, - SO4.mgL, -SO4.mgL_tm, -SiO2.mgL, -SiO2.mgL_tm, -W_DIC.mgL, -W_TPO4.mgL, -Notes, -W_SiO2.mgL, -DIC.mgL, -TN.mgL, -W_TDN.mgL, -DOC.mgL) %>%
+  dplyr::rename(TP.mgL = TP, Cl.mgL = Cl, SO4.mgL = SO4, SiO2.mgL = SiO2, DIC.mgL = DIC, TN.mgL = TN)
+
+#pivot back to long again
+waterchem_long <- waterchem_wide %>%
+ pivot_longer(cols= (where(is.numeric)), names_to="parameter")
+
+#summarize everything for full season in each year 
+waterchem_summary <- waterchem_long %>%
+  group_by(site, year, parameter) %>%
+  summarize(mean=mean(value, na.rm = TRUE), N=length(value)) %>%
+  ungroup()
+
+#then pivot wide again
+waterchem_means_wide <- waterchem_summary %>%
+  pivot_wider(names_from = parameter, values_from = mean)
+
+### ok now lets get the sample closest to the kick only 
+waterchem_kicks <- waterchem_wide %>%
+  filter(date.collected %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13"))
+```
+
+
+```{r flow, message = FALSE, warning = FALSE}
+#start with full season flow 
+
+#need to remove 1 outlier with max flow above 90% and m3 flow rates unreasonably high
+#L09 2021 08 14
+
+flow_fullseason <- field[-60, ]
+
+flow_fullseason_means <- flow_fullseason %>%
+        group_by(site, year) %>%
+        summarise(flow.m3s_mean = mean(flow.m3s, na.rm = TRUE), flow_max_perc_mean = mean(flow.p.max, na.rm = TRUE))
+
+# we want the flow rates for either during the kick, or just before it (not after)
+#2021 kicks 17 to 29 (flow 17 to 19)
+#2022 kicks 14 to 17 (flow 8-9)
+#2023 kicks 13 to 15 (flow 11-13)
+
+flow_september <- flow_fullseason %>%
+  filter(month(date) == '9')
+
+# perfect, can use this date filter for the waterchem too 
+flow_sept_kicks <- flow_september %>%
+  filter(date %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13")) %>%
+  rename(date.collected = date)
+  
+```
+
+```{r DOM, message = FALSE, warning = FALSE}
+# need DOM summaries here 
+DOM_data <- streams %>%
+        dplyr::select(c(1:14, 49))
+
+DOM_data <- DOM_data %>%
+        mutate(W_SUVA = (a254/2.302585)/W_DOC.mgL) %>%
+        mutate(SUVA = (a254/2.302585)/DOC.mgL)
+
+# remove 1 bix outliers 
+# 2023-09-13 C05, value = 33
+DOM_data[317,7] <- NA
+
+# remove one SR outlier 2022-09-23 at C05,  40.8
+DOM_data[199,13] <- NA
+
+#make year and site factor
+DOM_data$year <- as.factor(DOM_data$year)
+DOM_data$site <- as.factor(DOM_data$site)
+
+#remove some variables, don't need everything
+DOM_data <- DOM_data %>%
+  dplyr::select(-"hix", -"a254", -"a300", -"SR", -"E2_E3", -"S275_295", -"S350_400")
+
+#pivot longer
+DOM_data_long <- DOM_data %>%
+ pivot_longer(cols= (where(is.numeric)), names_to="parameter")
+
+#summarize everything
+DOM_summary <- DOM_data_long %>%
+  group_by(site, year, parameter) %>%
+  summarize(mean=mean(value, na.rm = TRUE), N=length(value)) %>%
+  ungroup()
+
+#then pivot wide again
+DOM_means_wide <- DOM_summary %>%
+  pivot_wider(names_from = parameter, values_from = mean)
+
+# DOM for kick timing only 
+DOM_kicks <- DOM_data %>%
+  filter(date.collected %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13"))
+```
+
+### Sediment data
+- high sediment rates in 2023 (expected as we had high flow during leafpack incubation)
+- higher sediment rates in L08 and some of the other lower sites 
+- though L08 not always as high as I would expect from what we have observed in field visits - tons of fine sediment observed in field 
+
+```{r fig.width=9, message = FALSE, warning = FALSE}
+
+#select only columns needed
+lp_sed <- leafpacks %>%
+  dplyr::select(site, year, rep, inc_days, cpom.g, fpom.g, cpim.g, fpim.g)
+
+#remove reps with no data (missing samples)
+lp_sed <- lp_sed %>% drop_na(cpom.g)
+
+#lp_sed$site <- lp_sed$site %>%    
+ #       factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+lp_sed$year <- as.factor(lp_sed$year)
+
+#add columns for total sediment, total organic, total inorganic
+lp_sed$total_sed <- lp_sed$cpom.g + lp_sed$cpim.g + lp_sed$fpim.g + lp_sed$fpom.g
+lp_sed$total_organic <- lp_sed$cpom.g + lp_sed$fpom.g
+lp_sed$total_inorganic <- lp_sed$cpim.g + lp_sed$fpim.g 
+
+#boxplot of raw total sed
+sedplot <- lp_sed %>%
+       ggplot(aes(x = site, y = total_sed, fill = year)) +
+       facet_wrap(~year, scales = "free_y") +
+       geom_boxplot() +
+       labs(title = "Sediment Deposition", y = "Total sediment deposition (g)") + theme_bw(base_size = 14) + theme(legend.position="bottom")
+
+#should have total sed deposited per day
+lp_sed$total_sed_day <- lp_sed$total_sed/as.numeric(lp_sed$inc_days)
+
+# Need to change to g/day/m2
+#Sed tube opening size = 7.3cm2 (7.297)
+#0.0007297 m2
+
+#have g/day/0.00073 m2 already
+# change to g/day/m2 by multiplying by 1/0.00073
+lp_sed$total_sed_day_m2 <- lp_sed$total_sed_day/0.0007297
+
+#percentage of organic vs inorganic
+lp_sed$org_perc <- (lp_sed$total_organic/ lp_sed$total_sed) *100
+lp_sed$inorg_perc <- (lp_sed$total_inorganic / lp_sed$total_sed) *100
+
+#percentage of each type to plot a relative abundance graph
+
+lp_sed$cpim_perc <- (lp_sed$cpim.g / lp_sed$total_sed) *100
+lp_sed$fpim_perc <- (lp_sed$fpim.g / lp_sed$total_sed) *100
+lp_sed$cpom_perc <- (lp_sed$cpom.g / lp_sed$total_sed) *100
+lp_sed$fpom_perc <- (lp_sed$fpom.g / lp_sed$total_sed) *100
+
+sed_summary <- lp_sed %>%
+  group_by(site, year) %>% summarize(total_sed_day = mean(total_sed_day), total_sed_day_m2 = mean(total_sed_day_m2), cpom.g = mean(cpom.g), cpim.g = mean(cpim.g), fpom.g = mean(fpom.g), fpim.g = mean(fpim.g), total_organic = mean(total_organic), total_inorganic = mean(total_inorganic), cpim_perc = mean(cpim_perc),  cpom_perc = mean(cpom_perc),  fpim_perc = mean(fpim_perc),  fpom_perc = mean(fpom_perc), org_perc = mean(org_perc), inorg_perc = mean(inorg_perc))
+
+```
+
+#### Add YSI + water temp,
+
+```{r, message = FALSE, warning = FALSE}
+### ok so we have YSI collected at time of kick for 2021, 2023 (not 2022)
+
+ysi <- invert_metadata %>%
+  dplyr::select(site, date, ysi.air.temp.c, ysi.water.temp.c, ysi.do.mgL, ysi.do.pct, ysi.orp, ysi.ph, ysi.cond.mscm)
+
+ysi <- ysi %>% drop_na(ysi.water.temp.c) %>%
+  mutate(year = lubridate::year(date)) %>%
+  dplyr::select(-date)
+
+ysi$year <- as.factor(ysi$year)
+
+## water temp we can pull from 'stage' file. pull average of Sept for now
+stage_temp <- stage %>%
+  filter(month(date.collected) == '9') %>%
+  group_by(site, year) %>%
+  summarize(mean_sept_temp = mean(stage.temp.C))
+
+stage_temp$year <- as.factor(stage_temp$year)
+
+# we also have rain gauge air temps for each region 2022 onwards, but not the most reliable (had some failures)
+
+```
+
+```{r final stream hab file, message = FALSE, warning = FALSE}
+stream_habitat_kicks <- waterchem_kicks %>%
+  left_join(DOM_kicks, by = c("site", "year", "date.collected")) %>%
+  left_join(flow_sept_kicks, by = c("site", "year", "date.collected")) %>%
+  left_join(sed_summary, by = c("site", "year")) %>%
+  left_join(ysi, by = c("site", "year")) %>%
+  left_join(stage_temp, by = c("site", "year")) 
+```
+
+# Part 2: Invert Community Data Analysis (2020 -2023)
+
+## Section A: Defoliation and Mortality within our sites 
+
+```{r pull in invert data, message = FALSE, warning = FALSE}
+inverts <- inverts %>%
+  dplyr::rename(Genus = "Genus and Species") %>%
+  mutate(Genus = ifelse(Genus == "Frisonia", "Frisonla", Genus)) %>%
+  mutate(Genus = ifelse(Genus == "Isoperia", "Isoperla", Genus)) #fix misspellings of Frisonia and Isoperia
+
+# re label unknown genus ones to Family sp. 
+inverts <- inverts %>%
+  mutate(Genus = ifelse(Genus == "Broken", paste0(Family, " sp."), Genus)) %>%
+    mutate(Genus = ifelse(Genus == "broken", paste0(Family, " sp."), Genus)) %>%
+  mutate(Genus = ifelse(Genus == "Other", paste0(Family, " sp."), Genus)) %>%
+  mutate(Genus = ifelse(Genus == "early instar", paste0(Family, " sp."), Genus)) %>%
+    mutate(Genus = ifelse(Genus == "Early instar", paste0(Family, " sp."), Genus)) %>%
+  mutate(Genus = ifelse(Genus == "Pupa", paste0(Family, " sp."), Genus)) %>%
+      mutate(Genus = ifelse(Genus == "unknown", paste0(Family, " sp."), Genus)) %>%
+        mutate(Genus = ifelse(Genus == "Unknown", paste0(Family, " sp."), Genus))
+```
+
+#### Family level
+- assessing everything at family level as chironomids were identified to genus differently in ref data
+
+```{r, fig.width = 12, fig.height = 10, message = FALSE, warning = FALSE}
+#check for NAs
+#is.na(inverts$count) #none found
+
+#str(inverts)
+
+#summary(inverts)
+#data looks good
+#the counts have a huge range on the high end though - from mean 65 and third quartile 62 to max 2360
+# its not all one species, site, or year that is high or anything though - pretty random throughout 
+
+#hist(inverts$count)
+#ok so most of the data is on the low end (as expected from the summary)
+
+#group by family
+inverts_family <- inverts %>%
+  group_by(Family, site, year) %>%
+  summarize(fcount = sum(count))
+
+#total abun per site per year
+inverts_fam_total <- inverts_family %>%
+  group_by(site, year) %>%
+  summarize(total = sum(fcount))
+
+inverts_family <- inverts_family %>%
+  left_join(inverts_fam_total, by = c("site", "year"))
+
+inverts_family <- inverts_family %>%
+  group_by(Family, site, year) %>%
+  mutate(relabun = fcount/total)
+
+#putting in numeric order of 1-12 for now
+inverts_family$site <- inverts_family$site %>%    
+        factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+#keep the top families and put the rest into other 
+inverts_family  <- inverts_family %>%
+    group_by(site, Family, year) %>%
+    arrange(-relabun)
+
+```
+
+### diversity metrics
+
+```{r}
+
+# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
+#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+
+#fixed this above, so don't think we need family name in genus anymore
+#inverts <- inverts %>%
+ # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
+
+### CHANGE TO FAMILY 
+
+#make sure there are no duplicates 
+inverts1 <- inverts %>%
+  dplyr::select(4,6,7,10) %>%
+  group_by(Family, site, year) %>%
+  summarize(count = sum(count))
+
+a2021 <- filter(inverts1, year == "2021")
+a2022 <- filter(inverts1, year == "2022")
+a2023 <- filter(inverts1, year == "2023")
+
+#2021
+a2021 <- a2021 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2021[is.na(a2021)] <- 0
+
+a2021 <- as.data.frame(a2021)
+rownames(a2021) <- a2021[,1] #change site to row names
+a2021 <- a2021 %>% dplyr::select(-1) #remove site column 
+
+#2022
+a2022 <- a2022 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2022[is.na(a2022)] <- 0
+
+a2022 <- as.data.frame(a2022)
+rownames(a2022) <- a2022[,1] #change site to row names
+a2022 <- a2022 %>% dplyr::select(-1) #remove site column 
+
+#2023
+a2023 <- a2023 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2023[is.na(a2023)] <- 0
+
+a2023 <- as.data.frame(a2023)
+rownames(a2023) <- a2023[,1] #change site to row names
+a2023 <- a2023 %>% dplyr::select(-1) #remove site column 
+
+sites <- as.data.frame(row.names(a2023)) %>%
+  dplyr::rename(site = "row.names(a2023)")
+
+# ok now its ready to actual run the metrics with vegan
+#Pileaus evenness is shannon div/richness
+
+diversity_2021 <- data.frame(sites, Shannon = diversity(a2021, index="shannon"),
+                             InverseSimpson = diversity(a2021, index="invsimpson"),
+                             richness = specnumber(a2021)) %>%
+        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2021")
+
+diversity_2022 <- data.frame(sites, Shannon = diversity(a2022, index="shannon"),
+                             InverseSimpson = diversity(a2022, index="invsimpson"),
+                             richness = specnumber(a2022)) %>%
+        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2022")
+
+diversity_2023 <- data.frame(sites, Shannon = diversity(a2023, index="shannon"),
+                             InverseSimpson = diversity(a2023, index="invsimpson"),
+                             richness = specnumber(a2023)) %>%
+        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity")%>% mutate(year = "2023")
+
+#combine it all
+diversity_inverts <- rbind(diversity_2021, diversity_2022, diversity_2023)
+
+diversity_inverts$site <- diversity_inverts$site %>%    
+        factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+mort_diversity <- defoliation_data %>%
+ full_join(diversity_inverts, by = c("site", "year"))
+
+#2023 all metrics 
+
+diversity_labs <- c(`InverseSimpson` = "Inverse Simpson's",
+                    `richness` = "Genus Richness",
+                    `Shannon` = "Shannon Diversity",
+                    `Evenness` = "Evenness")
+
+mort_diversity$diversity_metric <- mort_diversity$diversity_metric %>%
+                  factor(levels = c("richness", "Shannon", "InverseSimpson", "Evenness"))
+
+filter_div <- mort_diversity %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+  filter(site %in% c("U01", "U02")) %>%
+  filter(year == "2023")
+
+#fix the lowercase on richness
+new_labels <- c(richness = "Richness", Shannon = "Shannon", Evenness = "Evenness")
+
+mort_diversity <- mort_diversity %>%
+mutate(mort_cat = ifelse(site == "U01" & year == "2022", "LowMort",       
+                    ifelse( year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
+
+mort_diversity$mort_cat <- factor(mort_diversity$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+# defo diversity
+plot_div_defo <- mort_diversity %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
+      facet_grid(diversity_metric~year, scales = "free_y", labeller = labeller(diversity_metric = new_labels)) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year"),
+         shape = guide_legend(title = "Tree Mortality")) + theme(legend.position = "bottom")
+
+plot_div_defo
+
+```
+
+## PCA with stream enviro variables 
+
+```{r}
+# cut back on the sediment parameters (too many)
+# need to have same sample ID in the left column (as row names) as we do in the invert abundance data
+
+#start with defoliation_data and add all metadata
+
+#join everything together
+invert_env <- defoliation_data %>%
+    inner_join(stream_habitat_kicks, by = c("site", "year"))
+
+# ok now for this first envfit, we could just use stream_habitat_kicks 
+
+# then change row names to sites, col names to variables and you are good to go
+invert_stream <- as.data.frame(stream_habitat_kicks) %>%
+  # too many sed params that are correlated to each other cluttering up plots
+  dplyr::select(-org_perc, -inorg_perc, -total_organic, -total_inorganic, -fpom.g, -cpom.g, -fpim.g, -cpim.g, -total_sed_day)
+
+### try adding in defo here
+invert_stream <- invert_stream %>%
+  left_join(invert_env %>% dplyr::select(1,2,7), by = c("site", "year"))
+
+# what about other landscape vars?
+
+invert_stream <- invert_stream %>%
+  left_join(watershed_characteristics %>% dplyr::select(1,8,21), by = "site")
+```
+
+```{r PCA with envfit, fig.width = 12, fig.height= 12}
+
+### what about all 3 years together
+env_all <- invert_stream 
+
+env_all$site <- env_all$site %>%
+  factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+env_all <- env_all %>%
+  mutate(sample = paste(year, site, sep = "_")) 
+  
+  env_all <- env_all %>%
+  arrange(sample)
+  
+  env_all <- env_all %>%
+    relocate(sample)
+
+rownames(env_all) <- env_all[,1]
+
+env_all <- env_all %>% dplyr::select(-1, -2, -3, -4) %>%
+  dplyr::select(-ysi.orp, -ysi.do.pct, -ysi.air.temp.c, -W_DOC.mgL, -ysi.water.temp.c, -ysi.do.mgL, -ysi.ph, - ysi.cond.mscm, -flow.time)
+
+# created a cor plot of all stream variables with the 3 years included and chose most likely variables to be influential plus one representative if things were correlated (R2 > .95)
+# conductivity represents alk, cond, Ca, and DIC 
+# total algae represents total and diatoms
+# TN is TN and No2N03
+
+#### SCALE THIS
+env_all_subset <- env_all %>%
+    dplyr::select(cdefo5y, spfir, Elevation_Mean_metres, pH, TN.mgL, DOC.mgL, flow.m3s, mean_sept_temp, cond.umho.cm)
+
+env_all_scale <- scale(env_all_subset)
+  
+## set up dataframe for communities
+inverts_Test <- inverts1 %>%
+  mutate(sample = paste(year, site, sep = "_")) %>%
+ # dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count") %>%
+  ungroup() %>%
+  dplyr::select(-year, -site)
+
+inverts_Test <- inverts_Test %>%
+  arrange(sample)
+
+inverts_Test[is.na(inverts_Test)] <- 0
+
+inverts_Test <- as.data.frame(inverts_Test)
+rownames(inverts_Test) <- inverts_Test[,1] #change site to row names
+inverts_Test <- inverts_Test %>% dplyr::select(-1) #remove site column 
+
+# ok now we need the enviro data all combined and all in the same order as this (use arrange function )
+# use arrange to put everything into alphabetical order
+
+invert_stream <- as.data.frame(stream_habitat_kicks) %>%
+  mutate(sample = paste(year, site, sep = "_")) %>%
+  ungroup %>%
+  dplyr::select(-site) %>%
+  dplyr::select(sample, everything())
+
+invert_stream <- invert_stream %>%
+  arrange(sample) 
+
+rownames(invert_stream) <- invert_stream[,1]
+
+invert_stream <- invert_stream %>% dplyr::select(-1)
+
+invert_stream$year <- as.factor(invert_stream$year)
+
+# all years together 
+all_hel <- decostand(inverts_Test, "hellinger")
+
+### LAND AND STREAM TOGETHER SCALED
+vif.cca(rda(all_hel, env_all_scale)) 
+## all under 10 - elev is highest at 8
+
+pca_all <- rda(all_hel)
+
+summary(pca_all)
+
+print(pca_all)
+
+sites <- scores(pca_all, display = "site") %>% as.data.frame()
+sites$sample <- rownames(sites)  # optional for labeling
+
+#add defo for labels
+sites <- sites %>%
+  left_join(defoliation_data %>% mutate(sample = paste0(year, "_", site)), by = "sample")
+
+sites <- sites %>%
+mutate(mort_cat = ifelse(sample == "2022_U01", "LowMort",       
+                    ifelse(sample %in% c("2023_U01", "2023_U02"), "Mort", "NoMort")))
+  
+sites$mort_cat <- factor(sites$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+# Percent variance explained on axes
+eig_vals <- summary(pca_all)$cont$importance[2, 1:2] * 100
+x_lab <- paste0("PCA1 (", round(eig_vals[1], 1), "%)")
+y_lab <- paste0("PCA2 (", round(eig_vals[2], 1), "%)")
+
+library(ggrepel)  # for nice non-overlapping labels (optional but recommended)
+
+plot_pca_all <- ggplot() +
+  geom_point(data = sites, aes(x = PC1, y = PC2,color = cdefo5y, shape = mort_cat), size = 4) +
+ # geom_text_repel(data = sites, aes(x = PC1, y = PC2, label = sample), color = "black") + 
+  labs(x = x_lab, y = y_lab) + scale_color_viridis(direction = -1, name = "Cumulative Defoliation")  + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(shape = guide_legend(title = "Mortality"))  + theme_minimal() + theme(legend.position = "bottom")
+
+#### ALL TOGETHER ENV FIT
+en_all = envfit(pca_all, env_all_scale, permutations = 4999, na.rm = TRUE)
+en_all
+en_coord_cont_all = as.data.frame(scores(en_all, "vectors")) * ordiArrowMul(en_all)
+en_coord_cont_all <- cbind(en_coord_cont_all, env.variables = rownames(en_coord_cont_all)) #and then gives them their names
+en_coord_cont_all <- cbind(en_coord_cont_all, pval = en_all$vectors$pvals) # add pvalues to dataframe
+sig.env_all <- subset(en_coord_cont_all, pval<=0.05) #subset data to show variables significant at 0.05
+
+# make pretty labels
+pretty_labels <- c(
+  "Elevation_Mean_metres" = "Elevation",
+  "spfir" = "% Spruce-Fir",
+  "cdefo5y"    = "Cumulative Defoliation",
+  "TN.mgL" = "Total Nitrogen",
+  "flow.m3s" = "Stream Flow", 
+  "pH" = "pH", 
+  "cond.umho.cm" = "Conductivity", 
+  "mean_sept_temp" = "Stream Temperature", 
+  "DOC.mgL" = "DOC")
+
+
+# Apply the mapping
+sig.env_all$pretty_label <- pretty_labels[sig.env_all$env.variables]
+
+### FINAL PLOT - its the same as when separate, dont need 2 envfits 
+
+final_pca_all_plot <- plot_pca_all + geom_segment(data = sig.env_all, aes(x = 0, y = 0, xend = PC1, yend = PC2), arrow = arrow(length = unit(0.25, "cm")), colour = "black", lwd = 0.3) + geom_text_repel(data = sig.env_all, aes(x = PC1, y = PC2), colour = "black", fontface = "bold", label = sig.env_all$pretty_label) 
+
+```
+
+### Invert Community Metrics 
+```{r prepare the data, message = FALSE, warning = FALSE}
+# ok so we want a summary at the order level to start, then combine into EPT and other
+
+inverts_order <- inverts %>%
+  group_by(site, year, Order) %>%
+  summarize(Abundance = sum(count))
+  
+inverts_EPT <- inverts_order %>%
+ dplyr::filter(Order %in% c("Ephemeroptera", "Plecoptera", "Trichoptera")) %>%
+  group_by(site, year) %>%
+  summarize(EPT = sum(Abundance))
+                        
+inverts_other <- inverts_order %>%
+  dplyr::filter(!(Order %in% c("Ephemeroptera", "Plecoptera", "Trichoptera"))) %>%
+  group_by(site, year) %>%
+  summarize(Other = sum(Abundance))
+
+inverts_EPT1 <- inverts_EPT %>%
+  left_join(inverts_other, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT1 %>%
+  group_by(site,year) %>%
+  mutate(Total_Count = sum(EPT, Other)) %>%
+  mutate(perc_EPT = (EPT/Total_Count)*100)
+
+#change site to factor
+inverts_EPT2$site <- as.factor(inverts_EPT2$site)
+inverts_EPT2$year <- as.factor(inverts_EPT2$year)
+
+#reorder sites
+inverts_EPT2$site <- inverts_EPT2$site %>%    
+        factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+# calculate additional metrics
+
+#Ratio of EPT to chironomids
+inverts_chironomids <- inverts %>%
+  group_by(site, year, Family) %>%
+  summarize(Abundance = sum(count)) %>%
+ dplyr::filter(Family == "Chironomidae") %>%
+  dplyr::rename(chironomidae_count = Abundance) %>%
+  dplyr::select(-Family)
+
+inverts_chironomids$year <- as.factor(inverts_chironomids$year)
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  left_join(inverts_chironomids, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  mutate(ratio_EPT_chironomid = (EPT/(EPT + chironomidae_count))*100, 
+         perc_chironomid = (chironomidae_count/Total_Count)*100)
+
+# percent diptera and non insects
+inverts_diptera <- inverts_order %>%
+  filter(Order %in% c("Diptera", "Tubificida")) %>%
+  group_by(site, year) %>%
+  summarize(Diptera_noninsect = sum(Abundance))
+
+inverts_diptera_other <- inverts_order %>%
+  filter(!(Order %in% c("Diptera", "Tubificida"))) %>%
+  group_by(site, year) %>%
+  summarize(other = sum(Abundance))
+
+#Join together and calculate, add to EPT2 
+inverts_diptera <- inverts_diptera %>%
+  left_join(inverts_diptera_other, by = c("site", "year")) %>%
+  mutate(dipt_nonins_pct = (Diptera_noninsect/other)*100) %>%
+  dplyr::select(site, year, dipt_nonins_pct)
+
+inverts_diptera$year <- as.factor(inverts_diptera$year)
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  left_join(inverts_diptera, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  dplyr::select(-Other, -chironomidae_count)
+
+rm(inverts_diptera_other)
+
+```
+
+## Mortality Categories 
+
+```{r}
+# categorize this as No Mort (<10 % area - most are 0 but 10% is a possible threshold in literature), Low Mort (10-29.9%), and Mort (>30% area)
+
+mortality <- defoliation_data %>%
+  mutate(mort_cat = ifelse(year == "2022" & site == "U01", "LowMort",       
+                    ifelse(year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
+
+#make factor for each cat
+mortality$mort_cat <- factor(mortality$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+#join to EPT2
+mort_inverts <- mortality %>%
+ full_join(inverts_EPT2, by = c("site", "year")) %>%
+  dplyr::filter(year %in% c("2021", "2022", "2023"))
+
+mort_inverts$mort_cat <- factor(mort_inverts$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+mort_inverts23 <- mort_inverts %>%
+  dplyr::filter(year == "2023")
+
+mort_inverts22 <- mort_inverts %>%
+  dplyr::filter(year == "2022")
+```
+
+## plots
+
+```{r}
+
+#EPT
+# EPT defo 
+plot_EPTdefo <- mort_inverts %>%
+        ggscatter(x = "cdefo5y", y = "perc_EPT", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, 
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 100), cor.coef.size = 5) + 
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat"))+ labs(x = "Cumulative Defoliation", y = "% EPT Group") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+
+
+mort_inverts %>%
+        ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, 
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 5% Mortality", "Mort" = "> 25% Mortality", "LowMort" = "5 - 24.9% Mortality")) + 
+  guides(color = guide_legend(title = "Year"), nrow = 3,
+         shape = guide_legend(title = "Tree Mortality"), nrow =3) + theme(legend.position = "bottom")
+
+
+plot_EPTdefo 
+
+#percent chironomids with defo
+#plot 2019 too 
+
+defo_inverts <- mortality %>%
+ full_join(inverts_EPT2, by = c("site", "year")) %>%
+  dplyr::filter(year %in% c("2019", "2021", "2022", "2023"))
+
+plot_chirodefo19 <- defo_inverts %>%
+        ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4,
+                  #add = "reg.line", conf.int = TRUE, 
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+
+
+plot_chirodefo <- mort_inverts %>%
+        ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, 
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
+guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+
+#percent EPT with mortality
+EPT_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_EPT, fill=mort_cat)) +
+    geom_boxplot() +
+   # stat_summary(fun.y=mean, geom="point", shape=20, size=14, color="red", fill="red") +
+    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "Percent EPT") +
+    scale_fill_brewer(palette="Dark2") + geom_jitter(width = 0.2) +
+  scale_x_discrete(labels = c('Tree Mortality < 10% ','Tree Mortality > 30%')) +  theme_bw(base_size = 16) + theme(legend.position="none")
+
+EPT_mort
+
+
+
+#percent chironomids with mortality
+chiro_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_chironomid, fill=mort_cat)) +
+    geom_boxplot() +
+   # stat_summary(fun.y=mean, geom="point", shape=20, size=14, color="red", fill="red") +
+    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "Percent Chironomids") + geom_jitter(width = 0.2) +
+    scale_fill_brewer(palette="Dark2") + 
+  scale_x_discrete(labels = c('Tree Mortality < 10%','Tree Mortality > 30%')) +  theme_bw(base_size = 16) + theme(legend.position="none")
+
+chiro_mort 
+
+```
+  
+
+# Section B: Comparison to Nondefoliated CABIN Watersheds
+- CABIN data was downloaded from the online database  https://www.canada.ca/en/environment-climate-change/services/canadian-aquatic-biomonitoring-network/database.html
+- details on the download process/filters/watershed delineation can be found in the rmd file: CABIN_watershed_delineation.rmd 
+
+```{r pull all data}
+library(readr)
+# only using verified data
+ref_CABIN1 <- read_csv(paste0(McCaig_SBWD, "/CABIN_Analyses/ReferenceData/CABIN_Benthic_10Oct2024.csv"))
+
+#there is also "Unverified" CABIN data 
+#ref_CABIN_unver <-  read_csv(paste0(McCaig_SBWD, "/CABIN_Analyses/ReferenceData/CABIN_Benthic_Unverified_10Oct2024.csv"))
+
+# all data is valid and certified, can remove those columns, all kick times 3 min, all device is kicknet, dist from source is all NA
+ref_CABIN <- ref_CABIN1 %>%
+  dplyr::select(-LowestValid, -SelectedValid, -Certification, - KickTime, -Device, -DistanceFromSource)
+
+# filter provinces to QC and NB
+ref_CABIN <- ref_CABIN %>%
+  dplyr::filter(Province %in% c("New Brunswick", "Quebec"))
+
+#filter years
+# data is from 1987 to 2023
+# maybe restrict to same time period as study to start (2019 to 2023) - 136 samples
+# maybe last 10 years is better (2013 to 2023) - 388 samples
+# or open it up to last 20 years (2003 to 2023) - has 800+ unique samples (probably too many)
+ref_CABIN <- ref_CABIN %>%
+  dplyr::filter(Year > "2007")
+
+# Mesh size for 2013 onward is 400 
+
+#sample Status is either potential reference or reference, both can be included
+
+#need to fix any NAs that can reasonably be filled (i.e. if we have lower level taxonomy, we know the higher level)
+# start with Phylum
+# there a few individuals (flatworms) with Family/Genus ID but not higher levels
+#  Planariidae and #Dugesiidae family is in the Order Tricladida, Class Trepaxonemata, and phylum Platyhelminthes
+ref_CABIN <- ref_CABIN %>%       
+  mutate(Order = if_else(Family %in% c("Dugesiidae", "Planariidae"), "Tricladida", Order, missing = Order)) %>% 
+  mutate(Class = if_else(Family %in% c("Dugesiidae", "Planariidae"), "Trepaxonemata", Class, missing = Class)) %>% 
+  mutate(Phylum = ifelse(Family %in% c("Dugesiidae", "Planariidae"), "Platyhelminthes", Phylum)) %>%
+# a lot of Enchytraeidae Family have phylum and Class but no order
+# they belong to Enchytraeida Order
+ mutate(Order = ifelse(Family == "Enchytraeidae", "Enchytraeida", Order))
+
+
+### we are doing all analyses at Family level due to difference in Genus ID across projects
+# however we do have genus data if we wanted to look into it in specific cases
+
+#clean up NAs with unkown 
+
+ ref_CABIN <- ref_CABIN %>% 
+      mutate(Order = replace_na(Order, "unknown")) %>%
+   mutate(Family = replace_na(Family, "unknown")) %>%
+      mutate(Genus = replace_na(Genus, "unknown")) %>%
+  mutate(Family = ifelse(Family == "unknown", paste0(Order, " sp."), Family)) %>%
+     mutate(Family = ifelse(Family == "unknown sp.", paste0("unknown"), Family)) %>%
+  mutate(Genus = ifelse(Genus == "unknown", paste0(Family, " sp."), Genus)) %>%
+   mutate(Genus = ifelse(Genus == "unknown sp. sp.", paste0("unknown"), Genus))
+```
+
+## Filter to matching reference watersheds in QC/NB and prepare the data
+- CABIN reference watersheds were delineated in the rmd file: CABIN_watershed_delineation.rmd 
+- so we have 47 samples across 10 sites 
+- sampled from 2008 to 2022
+- 6 sites have multiple years of data
+- ASC001 and MOR001 have 7 years
+- BDR001 and PGA001 have 6 years
+- USR4 has 9 years 
+- PWR6 has 8 years 
+- BER001, MCAL01, NBRDG1007, and PFO001 only have 1
+
+```{r}
+library(sf)
+
+final_QC_refsheds <- readRDS(paste0(McCaig_SBWD, "/CABIN_Analyses/ReferenceData/final_QC_refsheds.rds"))
+
+final_NB_refsheds <- readRDS(paste0(McCaig_SBWD, "/CABIN_Analyses/ReferenceData/final_NB_refsheds.rds")) 
+
+final_NB_refsheds <- st_drop_geometry(final_NB_refsheds) %>%
+  dplyr::select(-VALUE, -FID) %>%
+  #change to the ideal conditions for NB
+  filter(Site %in% c("NBRDG1007", "PWR6", "MCAL01", "USR4")) 
+
+refsheds <- rbind(st_drop_geometry(final_QC_refsheds), final_NB_refsheds)
+
+invert_refs <- refsheds  %>%
+ left_join(ref_CABIN, by = "Site") %>%
+  rename(site = Site) %>%
+  rename(year = Year) %>%
+  rename(count = CompleteCount)
+
+invert_refs <- st_drop_geometry(invert_refs)
+
+unique(invert_refs$year)
+
+#summary table of which sites have multiple years
+ df <- invert_refs %>%
+  group_by(site) %>%
+  summarise(
+    n_sample_ids = n_distinct(SampleId),
+    n_years = n_distinct(year)
+  ) 
+# %>%
+#  filter(n_sample_ids > 1 & n_years > 1)
+ 
+ df1 <- invert_refs %>%
+  group_by(site) %>%
+  summarise(
+    SampleIDs = list(unique(SampleId)),
+    Years = list(unique(year))
+  ) %>%
+  filter(length(SampleIDs) > 1 & length(Years) > 1)
+
+```
+
+```{r reference data prep}
+
+##### calculate metrics for reference data
+
+# ok so we want a summary at the order level to start, then combine into EPT and other
+
+inverts_order <- invert_refs %>%
+  group_by(site, year, Order) %>%
+  summarize(Abundance = sum(count))
+  
+inverts_EPT <- inverts_order %>%
+ dplyr::filter(Order %in% c("Ephemeroptera", "Plecoptera", "Trichoptera")) %>%
+  group_by(site, year) %>%
+  summarize(EPT = sum(Abundance))
+                        
+inverts_other <- inverts_order %>%
+  dplyr::filter(!(Order %in% c("Ephemeroptera", "Plecoptera", "Trichoptera"))) %>%
+  group_by(site, year) %>%
+  summarize(Other = sum(Abundance))
+
+inverts_EPT1 <- inverts_EPT %>%
+  left_join(inverts_other, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT1 %>%
+  group_by(site,year) %>%
+  mutate(Total_Count = sum(EPT, Other)) %>%
+  mutate(perc_EPT = (EPT/Total_Count)*100)
+
+# box plot of percent EPT
+
+#change site to factor
+inverts_EPT2$site <- as.factor(inverts_EPT2$site)
+inverts_EPT2$year <- as.factor(inverts_EPT2$year)
+
+# calculate additional metrics
+
+#Ratio of EPT to chironomids
+inverts_chironomids <- invert_refs %>%
+  group_by(site, year, Family) %>%
+  summarize(Abundance = sum(count)) %>%
+ dplyr::filter(Family == "Chironomidae") %>%
+  dplyr::rename(chironomidae_count = Abundance) %>%
+  dplyr::select(-Family)
+
+inverts_chironomids$year <- as.factor(inverts_chironomids$year)
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  left_join(inverts_chironomids, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  mutate(ratio_EPT_chironomid = (EPT/(EPT + chironomidae_count))*100, 
+         perc_chironomid = (chironomidae_count/Total_Count)*100)
+
+# percent diptera and non insects
+### might be other non insects, would need to look through data
+inverts_diptera <- inverts_order %>%
+  filter(Order %in% c("Diptera", "Tubificida")) %>%
+  group_by(site, year) %>%
+  summarize(Diptera_noninsect = sum(Abundance))
+
+inverts_diptera_other <- inverts_order %>%
+  filter(!(Order %in% c("Diptera", "Tubificida"))) %>%
+  group_by(site, year) %>%
+  summarize(other = sum(Abundance))
+
+#Join together and calculate, add to EPT2 
+inverts_diptera <- inverts_diptera %>%
+  left_join(inverts_diptera_other, by = c("site", "year")) %>%
+  mutate(dipt_nonins_pct = (Diptera_noninsect/other)*100) %>%
+  dplyr::select(site, year, dipt_nonins_pct)
+
+inverts_diptera$year <- as.factor(inverts_diptera$year)
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  left_join(inverts_diptera, by = c("site", "year"))
+
+inverts_EPT2 <- inverts_EPT2 %>%
+  dplyr::select(-Other, -chironomidae_count)
+
+rm(inverts_diptera_other)
+```
+
+## Setup plots for adding reference data
+set up like Celine's with the mean as a red horziontal line and grey shading as CIs
+
+```{r EPT reference data}
+
+# just calculate the mean and 95% CIs across ref sites and add it in 
+## EPT % 
+mean(inverts_EPT2$perc_EPT) #mean is 84.7 #(old was #88.83)
+ci <- t.test(inverts_EPT2$perc_EPT)$conf.int
+ci
+# 81.7 87.7
+
+2*sd(inverts_EPT2$perc_EPT) #20.44
+84.7+20.44
+84.7-20.44
+
+# Mort EPT with 2 sd
+EPT_mort1 <- EPT_mort + geom_hline(yintercept=84.7, linetype="dashed", color = "red", size=2) + 
+  annotate('rect', xmin=0, xmax=3, ymin=64.3, ymax=105.1, alpha=.4, fill='grey') # specify size based on 2 SD (Celine's reccomendation based on a paper )
+
+# with 95% CI
+#p1 + geom_hline(yintercept=89.4, linetype="dashed", color = "red", size=2) + 
+ # annotate('rect', xmin=0, xmax=5, ymin=81.8, ymax=87.8, alpha=.4, fill='grey') # specify size based on CI
+
+
+### EPT and defo dot plot
+plot_EPTdefo1 <- plot_EPTdefo + geom_hline(yintercept=84.7, linetype="dashed", color = "red", size=2) + 
+  annotate('rect', xmin=2.5, xmax=11, ymin=64.3, ymax=105.1, alpha=.4, fill='grey')
+
+plot_EPTdefo1
+
+```
+
+
+## Chironomids
+
+```{r}
+#percent chironomids mort
+chiro_mort
+
+# just calculate the mean and 95% CIs across ref sites and add it in 
+## percent chiro
+mean(inverts_EPT2$perc_chironomid) #7.4 (old #6.6)
+
+ci <- t.test(inverts_EPT2$perc_chironomid)$conf.int
+ci
+# 5.4 to 9.4
+
+2*sd(inverts_EPT2$perc_chironomid) #13.4 (old #12.3)
+#range -6 to 20.8
+7.4+13.4
+7.4-13.4
+
+# with 2 sd (mort)
+chiro_mort1 <- chiro_mort + geom_hline(yintercept=7.4, linetype="dashed", color = "red", size=2) + 
+  annotate('rect', xmin=0, xmax=3, ymin=-6, ymax= 20.8, alpha=.4, fill='grey') # specify size based on 2 SD (Celine's reccomendation based on a paper )
+
+#Defo chiro
+plot_chirodefo1 <- plot_chirodefo + geom_hline(yintercept=7.4, linetype="dashed", color = "red", size=2) + 
+  annotate('rect', xmin=2.5, xmax=11, ymin=-6, ymax= 20.8, alpha=.4, fill='grey') 
+
+plot_chirodefo1 
+
+```
+
+## Combine EPT and chiro into one plot
+
+```{r}
+### EPT and defo dot plot
+plot_EPTdefo1
+
+# we need a legend here 
+# colours per year, mortality in black 
+# red line is mean 
+
+#Defo chiro
+plot_chirodefo1
+
+ggarrange(plot_EPTdefo1, plot_chirodefo1,
+        labels = c("A", "B"),
+         font.label=list(size = 16, color = "black", face = "bold"),
+     common.legend = TRUE,
+         legend = "bottom",
+          legend.grob = get_legend(plot_EPTdefo1),
+          ncol = 1, nrow = 2,
+        align = "hv") 
+
+#mort_chiro/ept 
+
+ggarrange(EPT_mort1, chiro_mort1,
+        labels = c("A", "B"),
+         font.label=list(size = 16, color = "black", face = "bold"),
+     common.legend = TRUE,
+         legend = "none",
+          #legend.grob = get_legend(p3),
+          ncol = 1, nrow = 2,
+        align = "hv") 
+
+
+
+```
+
+## reference data with diversity 
+
+```{r}
+# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
+#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+
+#fixed this above, so don't think we need family name in genus anymore
+#inverts <- inverts %>%
+ # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
+
+### CHANGE TO FAMILY
+
+#make sure there are no duplicates 
+inverts1_refs <- invert_refs %>%
+  dplyr::select(Family, site, year, count, SampleId) %>%
+  group_by(Family, SampleId) %>%
+  summarize(count = sum(count))
+
+#pivot wide
+ainverts1_refs <- inverts1_refs %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+ainverts1_refs[is.na(ainverts1_refs)] <- 0
+
+ainverts1_refs <- as.data.frame(ainverts1_refs)
+rownames(ainverts1_refs) <- ainverts1_refs[,1] #change sampleid to row names
+ainverts1_refs <- ainverts1_refs %>% dplyr::select(-1) #remove site column 
+
+sampleid <- as.data.frame(row.names(ainverts1_refs)) %>%
+  dplyr::rename(site = "row.names(ainverts1_refs)")
+
+# ok now its ready to actual run the metrics with vegan
+#Pielou’s evenness is Shannon diversity divided by richness
+diversity_refs <- data.frame(sampleid, Shannon = diversity(ainverts1_refs, index="shannon"),
+                             InverseSimpson = diversity(ainverts1_refs, index="invsimpson"),
+                             richness = specnumber(ainverts1_refs)) %>%
+        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>%
+  filter(site != "0")
+
+diversity_refs_summary <- diversity_refs %>%
+  group_by(diversity_metric) %>%
+  summarize(mean = mean(diversity), sdx2 = 2*sd(diversity), sd = sd(diversity)) %>%
+  mutate(low.limit = mean - sdx2, up.limit = mean + sdx2)
+
+diversity_refs_summary <- diversity_refs_summary %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness"))
+
+#diversity and defo 
+plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+```
+
+# PCA: Defoliated vs nondefoliated 
+
+```{r PCA with ref sites, fig.width = 12, fig.height= 12}
+
+### OK lets first try with all years of defo together maybe and just colour by defo gradient
+
+# need to combine ref and defo into one dataframe 
+
+#all years of our sites
+inverts_defo <- inverts_family %>%
+  filter(year != "2019") %>%
+  mutate(sample = paste(year, site, sep = "_")) %>%
+  ungroup() %>%
+  dplyr::select(-year, -site, -total, -relabun) %>%
+  # dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "fcount")  %>%
+  dplyr::rename(Capniidae = Capnidae) %>%
+  dplyr::rename(Ephemerellidae = Ephemereliidae) %>%
+  dplyr::rename(Glossosomatidae = Glossomatidae) %>%
+  dplyr::rename(Leptophlebiidae = Leptophlebidae) %>%
+  dplyr::rename(Simuliidae = Simulidae) 
+
+metadata_defo <- inverts_defo %>%
+  dplyr::select(sample) %>%
+  mutate(Site_Type = "Defoliated")
+
+#all ref sites 
+#make sure there are no duplicates 
+inverts1_refs <- invert_refs %>%
+  dplyr::select(Family, site, year, count, SampleId) %>%
+  mutate(SampleID1 = paste0(site, "_", year)) %>%
+  dplyr::select(-SampleId) %>%
+  group_by(Family, SampleID1) %>%
+  summarize(count = sum(count))
+
+#pivot wide
+inverts1_refs_wide <- inverts1_refs %>%
+  pivot_wider(names_from = "Family", values_from = "count") %>%
+  rename(sample = SampleID1) 
+
+metadata_refs <- inverts1_refs_wide  %>%
+  dplyr::select(sample) %>%
+  mutate(Site_Type = "Non-defoliated")
+
+all_metadata <- rbind(metadata_defo, metadata_refs)
+
+all_inverts <- bind_rows(inverts_defo, inverts1_refs_wide) %>%
+  dplyr::select(sort(colnames(.)))
+
+#checked all spelling, some columns were going separate because of spelling mistakes 
+
+all_inverts [is.na(all_inverts)] <- 0
+
+all_inverts <- all_inverts %>%
+  relocate(sample)
+
+all_inverts  <- as.data.frame(all_inverts)
+rownames(all_inverts) <- all_inverts[,1] #change site to row names
+all_inverts <- all_inverts %>% dplyr::select(-1) #remove site column 
+
+# ok data is all good for doing PCA now! 
+
+all_inverts_hel <- decostand(all_inverts, "hellinger")
+
+pca_all_inverts <- rda(all_inverts_hel)
+
+summary(pca_all_inverts)
+
+print(pca_all_inverts)
+
+samples_all <- scores(pca_all_inverts, display = "sites") %>% as.data.frame()
+samples_all$sample <- rownames(samples_all)  # optional for labeling
+
+#add metadata for labels
+samples_all <- samples_all %>%
+  left_join(all_metadata, by = "sample")
+
+# Percent variance explained on axes
+eig_vals <- summary(pca_all_inverts)$cont$importance[2, 1:2] * 100
+x_lab <- paste0("PCA1 (", round(eig_vals[1], 1), "%)")
+y_lab <- paste0("PCA2 (", round(eig_vals[2], 1), "%)")
+
+library(ggrepel)
+
+# ok if we want to add defo colours to this, need to join it to samples_all
+ defo_metadata <- defoliation_data %>%
+   mutate(sample = paste0(year, "_", site)) %>%
+   ungroup() %>%
+   dplyr::select(sample, cdefo5y)
+ 
+ samples_all <- samples_all %>%
+   left_join(defo_metadata, by = "sample") %>%
+     replace_na(list(cdefo5y = 0))
+ 
+ samples_all$Site_Type <- as.factor(samples_all$Site_Type)
+ 
+  samples_all <- samples_all %>%
+ mutate(mort_cat = ifelse(sample == "2022_U01", "LowMort",       
+                    ifelse(sample %in% c("2023_U01", "2023_U02"), "Mort", "NoMort")))
+  
+samples_all$mort_cat <- factor(samples_all$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+plot_pca_all <- ggplot() +
+  geom_point(data = samples_all, aes(x = PC1, y = PC2, color = cdefo5y, shape = mort_cat), size = 4) +
+ # geom_text_repel(data = samples_all, aes(x = PC1, y = PC2, label = sample), color = "black") +
+  scale_color_viridis(direction = -1, name = "Cumulative Defoliation")  + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(shape = guide_legend(title = "Mortality")) + theme(legend.position = "bottom")
+
+plot_pca_all1 <- plot_pca_all +
+  stat_ellipse(data = samples_all, aes(x = PC1, y = PC2, linetype = Site_Type), colour = "black", type = "norm", level = 0.95) +
+  guides(linetype = guide_legend(title = "Site Type")) +
+  labs(x = x_lab, y = y_lab)  +
+  theme_minimal()  + theme(legend.position = "bottom",  legend.box = "vertical", legend.box.just = "left")
+
+plot_pca_all1
+
+### PERMANOVA
+
+# Create distance matrix
+dist_matrix <- dist(all_inverts_hel, method = "euclidean")
+
+# Run PERMANOVA
+permanova_result <- adonis2(dist_matrix ~ Site_Type, data = samples_all, permutations = 999)
+
+print(permanova_result)
+
+#homogenety of variance 
+dispersion <- betadisper(dist_matrix, samples_all$Site_Type)
+anova(dispersion)
+
+#plot(dispersion)
+
+#boxplot(dispersion)
+
+
+# ANOSIM
+
+anosim_result <- anosim(dist_matrix, grouping = samples_all$Site_Type, permutations = 999)
+
+#print(anosim_result)
+#plot(anosim_result)
+```
+
+## Gamma Diversity and Differntial Abundance (Fisher's Exact)
+
+```{r}
+#all years of our sites
+inverts_defo_gamma <- inverts_family %>%
+  filter(year != "2019") %>%
+  #mutate(sample = paste(year, site, sep = "_")) %>%
+  ungroup() %>%
+  dplyr::select(-site, -total, -relabun) %>%
+ group_by(Family, year) %>%
+  summarize(count = sum(fcount)) %>%
+  mutate(Site_Type = "Defoliated") %>%
+  # fix some spelling mishaps
+  mutate(Family = ifelse(Family == "Capnidae", paste0("Capniidae"), Family)) %>%
+  mutate(Family = ifelse(Family == "Ephemereliidae", paste0("Ephemerellidae"), Family)) %>%
+  mutate(Family = ifelse(Family == "Glossomatidae", paste0("Glossosomatidae"), Family)) %>%
+  mutate(Family = ifelse(Family == "Leptophlebidae", paste0("Leptophlebiidae"), Family)) %>%
+  mutate(Family = ifelse(Family == "Simulidae", paste0("Simuliidae"), Family))
+
+#all ref sites 
+inverts_refs_gamma <- invert_refs %>%
+  dplyr::select(Family, site, year, count) %>%
+  group_by(Family) %>%
+  summarize(count = sum(count)) %>%
+  mutate(Site_Type = "Non-defoliated")
+
+# now how many unique to ref or defo
+
+#overall
+unique_defo <- inverts_defo_gamma %>%
+filter(!Family %in% inverts_refs_gamma$Family)
+
+unique_ref <- inverts_refs_gamma %>%
+filter(!Family %in% inverts_defo_gamma$Family)
+
+#2021
+inverts_defo21 <- inverts_defo_gamma %>%
+  filter(year == "2021")
+
+unique_defo21<- inverts_defo21 %>%
+filter(!Family %in% inverts_refs_gamma$Family)
+
+unique_ref21 <- inverts_refs_gamma %>%
+filter(!Family %in% inverts_defo21$Family)
+
+#2022
+inverts_defo22 <- inverts_defo_gamma %>%
+  filter(year == "2022")
+
+unique_defo22<- inverts_defo22 %>%
+filter(!Family %in% inverts_refs_gamma$Family)
+
+unique_ref22 <- inverts_refs_gamma %>%
+filter(!Family %in% inverts_defo22$Family)
+
+# 2023
+inverts_defo23 <- inverts_defo_gamma %>%
+  filter(year == "2023")
+
+unique_defo23<- inverts_defo23 %>%
+filter(!Family %in% inverts_refs_gamma$Family)
+
+unique_ref23 <- inverts_refs_gamma %>%
+filter(!Family %in% inverts_defo23$Family)
+
+# how many families overall in ref and defo combined (all years) 
+inverts_gamma_all <- rbind(inverts_refs_gamma %>% dplyr::select(Family, Site_Type),inverts_defo_gamma %>% dplyr::select(Family, Site_Type))
+unique(inverts_gamma_all$Family) # 72 familes
+
+# how many families overall in ref and defo 2021?
+inverts_gamma_all21 <- rbind(inverts_refs_gamma %>% dplyr::select(Family, Site_Type),inverts_defo21 %>% dplyr::select(Family, Site_Type))
+unique(inverts_gamma_all21$Family) # 72 familes
+
+# how many families overall in ref and defo 2022?
+inverts_gamma_all22 <- rbind(inverts_refs_gamma %>% dplyr::select(Family, Site_Type),inverts_defo22 %>% dplyr::select(Family, Site_Type))
+unique(inverts_gamma_all22$Family) # 72 familes
+
+# how many families overall in ref and defo 2023?
+inverts_gamma_all23 <- rbind(inverts_refs_gamma %>% dplyr::select(Family, Site_Type),inverts_defo23 %>% dplyr::select(Family, Site_Type))
+unique(inverts_gamma_all23$Family) # 70 familes
+
+
+#across all years 4 Families unique to defo, 45 Families unique to ref, 23 shared Families
+### 2021-  2 unique defo,  46 unique ref, 24 shared
+### 2022 - 2 unique defo,  45 unique ref, 25 shared
+## 2023 - 0 unique defo,  46 unique ref, 24 shared
+
+### now need this all in one data frame -
+
+gamma_df <- data.frame(
+  #year = rep(c(2021, 2022, 2023), each = 3),
+  count = c(4, 45, 23),
+  Category = rep(c("Unique to Defoliated", "Unique to Non-Defoliated", "Shared"), times = 1)
+)
+
+#gamma_df <- data.frame(
+#  year = rep(c(2021, 2022, 2023), each = 3),
+#  count = c(2, 46, 24, 2, 45, 25, 0, 46, 24),
+#  Category = rep(c("Unique to Defoliated", "Unique to Non-Defoliated", "Shared"), times = 3))
+
+
+#gamma_df$year <- as.factor(gamma_df$year)
+
+gamma_df$Category <- factor(gamma_df$Category, levels = c("Unique to Defoliated", "Unique to Non-Defoliated",  "Shared" ))
+
+# ok now need to plot this!
+#position = "stack", stat = "identity"
+
+gammaplot <- ggplot(gamma_df, aes(x=Category, y=count, fill = Category)) + geom_bar(stat = "identity") + theme_bw() + guides(fill=guide_legend(title="Number of Families"))  + scale_fill_manual(name = "Number of Families", values = c("Unique to Defoliated" = "#440154", "Unique to Non-Defoliated" = "#b5de2b", Shared = "grey")) + 
+  scale_x_discrete(
+    labels = c(
+      "Unique to Defoliated" = "Defoliated Only",
+      "Unique to Non-Defoliated" = "Non-defoliated Only",
+      "Shared" = "Present in Both Groups")) + ylab("Number of Families") + xlab("Presence-Absence per Group") +  theme_minimal(base_size = 14) + theme(legend.position = "none")
+
+gammaplot
+
+```
+
+### Differential Abundance Analysis
+
+- because this is morhpologically identified data and not microbial data, we can't use ANCOM or ALDEX (they are for compositional, genetic data)
+- the better otpion is mvabun::manyglm()
+- edgeR or DESeq2 can be also be used if taxa are reasonably abundant and not too zero inflated (not sure about using them for this case, pretty zero inflated when incorporating ref sites)
+- none of these 3 work with the very zero inflated data (especially with having many only found in ref sites and the unequal dispersion)
+
+# try just fisher's exact 
+
+```{r}
+#group factor in separate object 
+pa_data <- all_inverts > 0
+  
+group <- factor(c(rep("Defo", 36), rep("Non", 47)))
+
+fisher_pvals <- numeric(ncol(pa_data))
+names(fisher_pvals) <- colnames(pa_data)
+
+# Loop through taxa and run Fisher's Exact Test
+for (i in seq_len(ncol(pa_data))) {
+  taxon_presence <- pa_data[, i]
+  contingency <- table(taxon_presence, group)
+
+  # Check for proper 2x2 structure
+  if (all(dim(contingency) == c(2, 2))) {
+    fisher_pvals[i] <- fisher.test(contingency)$p.value
+  } else {
+    fisher_pvals[i] <- NA  # Not enough data to test
+  }
+}
+
+# Adjust p-values
+fisher_pvals_adj <- p.adjust(fisher_pvals, method = "fdr")
+
+# Combine into df
+fisher_results <- data.frame(
+  Taxon = names(fisher_pvals),
+  P_Value = fisher_pvals,
+  P_Adj = fisher_pvals_adj
+)
+
+#sort by p-val
+fisher_results <- fisher_results[order(fisher_results$P_Adj), ]
+
+# View top significant taxa
+head(fisher_results, 10)
+
+# second attempt with effect sizes
+
+# create the empty df
+results <- data.frame(
+  Taxon = colnames(pa_data),
+  P_Value = NA,
+  Odds_Ratio = NA,
+  Direction = NA
+)
+
+# Loop through each taxon
+for (i in seq_len(ncol(pa_data))) {
+  taxon <- pa_data[, i]
+  tbl <- table(taxon, group)
+  
+  # Proceed only if it's a 2x2 table
+  if (all(dim(tbl) == c(2, 2))) {
+    fisher_res <- fisher.test(tbl)
+    
+    # Fill results
+    results$P_Value[i] <- fisher_res$p.value
+    results$Odds_Ratio[i] <- fisher_res$estimate
+    
+    # Direction (which group has higher presence)
+    presence_by_group <- tapply(taxon, group, mean)  # proportion present
+    if (presence_by_group[1] > presence_by_group[2]) {
+      results$Direction[i] <- levels(group)[1]  # e.g., "Reference"
+    } else if (presence_by_group[2] > presence_by_group[1]) {
+      results$Direction[i] <- levels(group)[2]  # e.g., "Test"
+    } else {
+      results$Direction[i] <- "Equal"
+    }
+  }
+}
+
+# Adjust p-values
+results$P_Adj <- p.adjust(results$P_Value, method = "fdr")
+
+# Sort by sig
+results <- results[order(results$P_Adj), ]
+
+
+```
+### PLOT 
+
+```{r}
+# alpha
+alpha <- 0.05
+
+results <- results %>%
+  filter(Taxon != "unknown")
+
+# Filter significant taxa
+sig <- subset(results, P_Adj < alpha)
+
+# Handle infinite values for plotting
+max_log_or <- 5
+min_log_or <- -5
+
+# Log-transform
+sig$log_or <- log(sig$Odds_Ratio)
+sig$log_or[is.infinite(sig$log_or) & sig$Odds_Ratio > 1] <- max_log_or
+sig$log_or[is.infinite(sig$log_or) & sig$Odds_Ratio < 1] <- min_log_or
+
+
+# plot
+daa_plot <- ggplot(sig, aes(x = log_or, y = reorder(Taxon, log_or), fill = Direction)) +
+  geom_col(width = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_x_continuous(
+    name = "Log Odds Ratio",
+    limits = c(min_log_or, max_log_or),
+    breaks = seq(min_log_or, max_log_or, 1)
+  ) +
+  scale_y_discrete(name = "Significant Taxa (p <0.05)") +
+  scale_fill_manual(values = c("Defo" = "#440154", "Non" = "#b5de2b"), 
+                        labels = c("Defo" = "Defoliated", "Non" = "Non-defoliated")) +
+  labs(
+  #  title = "Significant Taxa by Fisher's Exact Test",
+  # subtitle = paste("FDR-adjusted p-value <", alpha),
+    fill = "Site Type"
+  ) +
+  theme_minimal(base_size = 14) +  theme(legend.position = "bottom")
+
+legend_b <- get_legend(daa_plot)
+
+
+```
+
+# combined plot
+
+```{r}
+ggarrange(gammaplot, daa_plot,
+        labels = c("A", "B"),
+         font.label=list(size = 16, color = "black", face = "bold"),
+     common.legend = TRUE,
+         legend = "bottom",
+          legend.grob = get_legend(daa_plot),
+          ncol = 2, nrow = 1
+       # align = "hv"
+     ) 
+
+## try this to fix legends
+daa_plot_clean <- daa_plot + theme(legend.position = "none")
+
+plots_row <- ggarrange(gammaplot, daa_plot_clean,
+                       labels = c("A", "B"),
+                       ncol = 2)
+
+# Now arrange the legend only below plot B, aligned left
+final_plot <- ggarrange(
+  plots_row,
+  legend_b,
+  ncol = 1,
+  heights = c(1, 0.1)
+  #align = "left"
+)
+```
+

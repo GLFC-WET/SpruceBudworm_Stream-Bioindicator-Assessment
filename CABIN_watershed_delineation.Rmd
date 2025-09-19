@@ -1,0 +1,1374 @@
+---
+title: "CABIN Reference Watershed Delineation"
+author: "Madison McCaig"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(whitebox)
+#wbt_init(exe_path = "C:/WhiteboxTools_win_amd64/WhiteboxTools_win_amd64/WBT/whitebox_tools.exe")
+wbt_init(exe_path = "C:/Users/mmccaig/WhiteboxTools_win_amd64/WBT/whitebox_tools.exe")
+library(tidyverse)
+library(readr)
+library(sf)
+library(terra)
+library(stringr)
+library(nngeo)
+library(raster)
+#library(sen2r)
+
+#path to watershedEcolB personal workspace
+McCaig_SBWD <- "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/"
+```
+
+# CABIN reference data download process
+- CABIN data was downloaded from the online database  https://www.canada.ca/en/environment-climate-change/services/canadian-aquatic-biomonitoring-network/database.html
+	1) Downloaded data in Atlantic Canada + Quebec 
+		- Only downloaded the reference, potential reference, or QAQC sites, not the "test" sites
+	  - Downloaded lowest level taxonomy
+
+# Study List that was downloaded: 
+	• GRDI - Atlantic
+	• Atlantic CABIN
+	• CABIN Research - Atlantic
+	• NB - Kennebecasis Watershed Restoration CABIN Study
+	• NB - Kouchibouguac NP
+	• NB - New Brunswick Benthic Studies
+	• NB Belleisle Watershed Monitoring
+	• NB Nashwaak Watershed
+	• NB-ACAP Saint John
+	• NB-Fundy NP - Dickson Brook
+	• NB-Fundy NP - Stream condition Monitoring Sites
+	• NB-Fundy NP - Upper Salmon River
+	• NB-Gagetown Benthic Monitoring Program
+	• NB-Havelock Watershed Study
+	• NB-Kennebecasis Watershed Monitoring KWRC
+	• NB-MAES Mainsteam
+	• NB-Petitcodiac Little River
+	• NB-Petitcodiac Watershed Alliance
+	• NB-St. Croix River Benthic Invertebrate Sampling
+	• NB-TWA Tabusintac Watershed Association
+	• NL-ACAP Humber Arm
+	• NL-Gros Morne NP
+	• NL-Indian Bay Watershed
+	• NL-Newfoundland Labrador Province - Water Resources Management Division
+	• NL-Northeast Avalon
+	• NL-Terra Nova National Park CABIN
+	• NL-Torngat National Park Reserve
+	• NL-Waterford Watershed Restoration Project
+	• NS ACAP Cape Breton/CBRM Source Watershed Monitoring
+	• NS Five Watersheds Project
+	• NS-ACAP Cape Breton
+	• NS-Annapolis River
+	• NS-Antigonish Rivers Association Aquatic Habitat Monitoring Program
+	• NS-Bluenose ACA
+	• NS-Cape Breton Highlands Headwater Stream Project
+	• NS-Cape Breton Highlands National Park
+	• NS-Clean Nova Scotia
+	• NS-Cornwallis River AEI
+	• NS-East Coast Aquatics
+	• NS-Freshwater Hatcheries
+	• NS-Kejimkujik National Park
+	• NS-Kejimkujik NP - Upper Mersey
+	• NS-Kejimkujik RCA
+	• NS-LaHave River Catchment Liming Offsetting Project
+	• NS-NB-PEI- SGSL - Coalition
+	• NS-Salmon River Benthic invertebrate study
+	• NS-Shubenacadie Watershed Monitoring
+	• NS-SMR CABIN 2024
+	• NS-SRM CABIN
+	• NS-UINR Project
+	• PEI CABIN - Province
+	• PEI- Prince Edward Island National Park
+	• PEI-Abegweit Guardians Monitoring (AGM)
+	• PEI-BBEMA
+	• PEI-Hunter-Clyde Watershed
+	• PEI-Southeast Environmental Associatio
+	• PEI-Winter River - Tracadie Bay watershed
+	• Qc Comparaison MDDECC-ECCC
+	• QC-DND Valcartier Garrison
+	• QC-NB-Biomonitoring Appalaches
+	• QC-Nunavik
+	- QC-PASL Labo Vivant LSP
+
+## Initial Studies REMOVED
+
+- Upon visual inspection on google earth, these sites are all on the shores of lakes and are not comparable to our study sites. Some location information from these studies is also not accurate (the same site tag in multiple locations)
+- Biomonitoring Rivière Saint-Maurice
+- Qc La Mauricie Parc Rivières
+
+
+## filter reference data
+
+- restrict to stream order 2 or 3
+- this leaves us with 1005 samples at 373 unique sites
+- potential reference or reference (not test site)
+
+```{r pull in ref data, eval = FALSE}
+
+#habitat data that was downloaded from the CABIN website ('verified' only )
+Ref_Habitat <- read_csv(paste0(McCaig_SBWD, "CABIN_Analyses/ReferenceData/CABIN_Habitat_10Oct2024.csv")
+
+Ref_Habitat <- Ref_Habitat %>%
+  dplyr::filter(StreamOrder %in% c("2", "3"))
+
+#create a file for each province as we will have to delineate watersheds separately as data availability varies by province 
+
+Ref_Locations_QC <- Ref_Habitat %>%
+  dplyr::filter(Province == "Quebec") %>%
+  dplyr::select(3,19,20,21)
+
+Ref_Locations_NB <- Ref_Habitat %>%
+  dplyr::filter(Province == "New Brunswick") %>%
+  dplyr::select(3,19,20,21)
+
+Ref_Locations_NS <- Ref_Habitat %>%
+  dplyr::filter(Province == "Nova Scotia") %>%
+  dplyr::select(3,19,20,21)
+
+Ref_Locations_NL <- Ref_Habitat %>%
+  dplyr::filter(Province == "Newfoundland and Labrador") %>%
+  dplyr::select(3,19,20,21)
+
+Ref_Locations_PEI <- Ref_Habitat %>%
+  dplyr::filter(Province == "Prince Edward Island") %>%
+  dplyr::select(3,19,20,21)
+
+#write.csv(Ref_Locations_QC, "Ref_Locations_QC.csv", row.names=FALSE)
+
+#write.csv(Ref_Locations_NB, "Ref_Locations_NB.csv", row.names=FALSE)
+
+#write.csv(Ref_Locations_NS, "Ref_Locations_NS.csv", row.names=FALSE)
+
+#write.csv(Ref_Locations_NL, "Ref_Locations_NL.csv", row.names=FALSE)
+
+#write.csv(Ref_Locations_PEI, "Ref_Locations_PEI.csv", row.names=FALSE)
+```
+
+# Create location files
+
+- only using NB and QC (closest to our defoliated watersheds)
+- manually removed duplicate locations based on google earth investigations
+		○ Several sites that were repeat samples had mistyped or missing lat/long information. Updated those with the previous years locations
+		○ Several sites had slightly different lat/long for different samples. These were all manually visually investigated and adjusted to have 1 set of lat/long coordinates per site at the most downstream spot
+			§ Most sites were just 10-20m apart and those are likely just differences in the spot the GPS point was taken
+			§ A couple of sites had a larger difference. We used 50m as the cutoff. Anything less than 50m different was changed to the most downstream spot as the "pour point"
+- Sites with larger gaps between locations (50 to 200 m) were  kept track of in a spreadsheet ("Ref_Discrepencies")
+    - these ones were re-labelled as A and B as potentially different sites and watersheds created for both 
+- we have 45 (plus 5 A/B) potential NB watersheds and 21 potential QC watersheds
+- the resulting A/B watersheds were very similar and we just chose the one with the most downstream pour point to represent all samples for that location 
+
+```{r, eval = FALSE}
+Ref_Locations_QC <- read_csv(paste0(McCaig_SBWD, "CABIN_Analyses/ReferenceData/Ref_Locations_QC.csv")
+
+site_locations_QC <- st_as_sf(x=Ref_Locations_QC, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+
+Ref_Locations_NB <- read_csv(paste0(McCaig_SBWD, "CABIN_Analyses/ReferenceData/Ref_Locations_NB.csv")
+
+site_locations_NB <- st_as_sf(x=Ref_Locations_NB, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+
+rm(Ref_Locations_QC, Ref_Locations_NB)
+
+#combine these together to do QC and NB at once
+site_locations <- rbind(site_locations_QC, site_locations_NB)
+
+#saveRDS(site_locations, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/site_locations_NBQC.rds")
+```
+
+# prepare the DEM files 
+
+## Quebec first
+- two files here, sites in central QC (Montreal area) and Gaspesie Area (don't need the DEM for the whole prov)
+
+### Gaspesie Ref Sites 
+
+```{r}
+files_Gasp <- list.files("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refs", full.names = T)
+
+#now try making vrt
+
+vrt(grep("MNT.+tif", 
+         files_Gasp, 
+         value = T), 
+    filename = paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/", "QCref_gaspe_dem1m.vrt"), 
+    overwrite = T)
+
+library(readr)
+Ref_Locations_QC_gaspesie <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_QC_gaspesie.csv")
+
+Ref_Locations_QC_gaspesie <- st_as_sf(x=Ref_Locations_QC_gaspesie, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+
+#check it 
+vrt_QC_gaspe <- terra::rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCref_gaspe_dem1m.vrt")
+
+point_data_transformed <- st_transform(Ref_Locations_QC_gaspesie , crs = st_crs(vrt_QC_gaspe))
+
+plot(vrt_QC_gaspe)
+#adding the points only works in the console for some reason
+#points(point_data_transformed, col = "red")
+
+# ok now aggregate it and get rid of any holes 
+
+QC_gaspe.10M <- aggregate(vrt_QC_gaspe, fact = 10, cores= 10)
+
+# the aggregate step was in there from Emily's code
+# i tried both 10m aggregated and non aggregated (so just 1m)
+
+## Get rid of the NA holes along the borders between rasters
+QC_Gaspe_DEM <- terra::focal(QC_gaspe.10M, fun = mean, na.policy = "only", na.rm = T)
+
+writeRaster(QC_Gaspe_DEM, paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/", "/QC_Gaspe_DEM.tif"), overwrite = T)
+
+# check again with plot
+plot(QC_Gaspe_DEM)
+points(point_data_transformed, col = "red")
+
+```
+
+### Central QC ref sites
+
+```{r}
+files_centralQC <- list.files("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Central_refs", full.names = T)
+
+#now try making vrt
+
+vrt(grep("MNT.+tif", 
+         files_centralQC, 
+         value = T), 
+    filename = paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/", "QCref_central_dem1m.vrt"), 
+    overwrite = T)
+
+library(readr)
+
+Ref_Locations_QC_central <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_QC_central.csv")
+
+Ref_Locations_QC_central <- st_as_sf(x=Ref_Locations_QC_central, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+
+#check it 
+vrt_QC_central <- terra::rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCref_central_dem1m.vrt")
+
+QC_cent_transformed <- st_transform(Ref_Locations_QC_central , crs = st_crs(vrt_QC_central))
+
+plot(vrt_QC_central)
+#points(QC_cent_transformed, col = "red")
+
+# ok now aggregate it and get rid of any holes 
+
+QC_central.10M <- aggregate(vrt_QC_central, fact = 10, cores= 10)
+
+## Get rid of the NA holes along the borders between rasters
+QC_Central_DEM <- terra::focal(QC_central.10M, fun = mean, na.policy = "only", na.rm = T)
+
+writeRaster(QC_Central_DEM, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QC_Central_DEM.tif")
+
+# check again with plot
+plot(QC_Central_DEM)
+points(QC_cent_transformed, col = "red")
+```
+
+# Generate Watersheds 
+
+## Quebec Watersheds
+- again we have two areas, central and gaspesie 
+- start with Gaspesie 
+
+```{r}
+# load and project DEM 
+DEM_QC_Gaspe <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QC_Gaspe_DEM.tif")
+
+DEM_Gaspe_32198 <- terra::project(x = DEM_QC_Gaspe, 
+                 y = "+init=epsg:32198",
+                method = "bilinear")
+
+writeRaster(DEM_Gaspe_32198,paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/", "/DEM_Gaspe_32198.tif"), overwrite = T)
+
+## Load sites and resolve projection issues
+sites <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_QC_gaspesie.csv")
+
+sites <- st_as_sf(x=sites, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+sites <- st_make_valid(sites)
+
+DEM_QC_Gaspe_32198 <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/DEM_Gaspe_32198.tif")
+
+# check again with plot
+plot(DEM_QC_Gaspe_32198)
+points(sites, col = "red")
+
+#load streams(already transformed into 32198)
+#just using the OG stream layer that Brian used, very similar to the GRHQ but already cleaned up for us 
+streams <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/BrianKielstra/SBWD/out_spatial/QC_Gaspe_Streams_Polyline_32198.shp") 
+
+## Pre-processing
+# for these whitebox tools you have to specify actual saved file locations not just R objects
+#should burn in streams first then breach depressions
+# though note that burning in streams isn't always necessary! only if in flat area or if there is a bridge over top of site or something 
+# burn in the streams
+
+wbt_fill_burn(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_32198.tif", 
+              streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/BrianKielstra/SBWD/out_spatial/QC_Gaspe_Streams_Polyline_32198.shp", 
+              output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_32198_fillburn.tif")
+
+# change this to flow accumulation workflow
+# it does the breach depressions, flow pointer, and flow accumulation raster all in one step! 
+
+wbt_flow_accumulation_full_workflow(
+  dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_32198_fillburn.tif", out_dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_32198_fillburn_breached.tif", out_pntr = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_DEM_d8pointer.tif", out_accum = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_d8accum.tif", out_type = "cells")
+
+# it worked! 
+# check these layers in Arc! not here (won't be able to see enough detail here)
+#zoom in to streams and make sure it looks good
+
+# ok now to determine the threshold we want to use to extract streams, we need to load into Arc
+#load pour points and flow accumulation layer and look for typical stream values and use that to inform choice of threshold. so anything higher than threshold is  called a stream 
+ 
+## Generate streams with a stream initiation threshold of 2000
+#based on visual inspection, the smallest stream near the sites had a value of 2100
+wbt_extract_streams(flow_accum = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_d8accum.tif",output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_32198_DEM_streams.tif", threshold = 2000)
+
+#ok create the pour points from the site locations 
+# just need to save as .shp file
+#also make sure we have a 'site' column in lower case
+
+sites_transformed <- st_transform(sites, crs = st_crs(DEM_QC_Gaspe_32198)) %>%
+  dplyr::rename(site = Site)
+
+st_write(sites_transformed, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_pp.shp", append = FALSE)
+      
+## Create the watershed
+### Snap the pour point to the streams
+#dist is in units of map (so metres)
+ wbt_jenson_snap_pour_points(pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_pp.shp",
+                                  streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_32198_DEM_streams.tif", 
+                                  snap_dist = 100, 
+                                  output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_ppsnap.shp")
+# not sure if we need this step?
+wbt_vector_points_to_raster(input = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_ppsnap.shp", 
+                                  output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_ppsnap.tif",
+                                  base = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Gaspe_d8accum.tif")
+
+## Create the watersheds
+      wbt_watershed(
+            d8_pntr = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_DEM_d8pointer.tif",
+            pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_ppsnap.shp",
+            output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refcatchments.tif")
+      
+  Gaspe_refcatchments <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refcatchments.tif")
+  Gaspe_refcatchments_poly <- as.polygons(Gaspe_refcatchments)
+
+#this worked best to convert to polygons 
+wbt_raster_to_vector_polygons(input = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refcatchments.tif", output ="//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refcatchments1.shp" )
+
+```
+
+# Central GC Watersheds
+
+```{r}
+# load and project DEM 
+DEM_QC_Central <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QC_Central_DEM.tif")
+
+DEM_Central_32198 <- terra::project(x = DEM_QC_Central, 
+                 y = "+init=epsg:32198",
+                method = "bilinear")
+
+writeRaster(DEM_Central_32198, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198.tif", overwrite = TRUE)
+
+## Load sites and resolve projection issues
+sites <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_QC_central.csv")
+
+sites <- st_as_sf(x=sites, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+sites <- st_make_valid(sites)
+
+DEM_QC_Central_32198 <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198.tif")
+
+# save sites as .shp file for processing later on (pp for pour points)
+#also make sure we have a 'site' column in lower case
+
+sites_transformed <- st_transform(sites, crs = st_crs(DEM_QC_Central_32198)) %>%
+  dplyr::rename(site = Site)
+
+st_write(sites_transformed, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Centralref_pp.shp", append = FALSE)
+
+# check with plot
+
+plot(DEM_QC_Central_32198)
+points(sites_transformed, col = "red")
+
+#load streams - 3 different shape files
+
+streams_GRHQ_05AK <- st_zm(st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/hydrographic_provincial/QC/GRHQ/05/GRHQ_05AK.gdb", layer = "RH_L"), drop = TRUE, what = "ZM") %>%
+  dplyr::rename(geometry = Shape)
+
+streams_GRHQ_05AK = st_cast(streams_GRHQ_05AK, "LINESTRING")
+
+streams_GRHQ_05AL <- st_zm(st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/hydrographic_provincial/QC/GRHQ/05/GRHQ_05AL.gdb", layer = "RH_L"), drop = TRUE, what = "ZM") %>%
+  dplyr::rename(geometry = Shape)
+
+streams_GRHQ_05AL = st_cast(streams_GRHQ_05AL, "LINESTRING")
+
+streams_GRHQ_05AM <- st_zm(st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/hydrographic_provincial/QC/GRHQ/05/GRHQ_05AM.gdb", layer = "RH_L"), drop = TRUE, what = "ZM") %>%
+  dplyr::rename(geometry = Shape)
+
+streams_GRHQ_05AM = st_cast(streams_GRHQ_05AM, "LINESTRING")
+
+# join these guys together
+streams <- rbind(streams_GRHQ_05AK, streams_GRHQ_05AL, streams_GRHQ_05AM)
+
+#reduce to only columns we need
+#exclude intermittent streams
+#filter to only watercourses (not lacs, dams, etc)
+streams <- streams %>%
+  dplyr::select(ENABLED, TYPECE, PERENNITE, FONCTION, ISOLE, Shape_Length, geometry)
+
+#convert multiline string to string ?
+#streams_GRHQ <- st_zm(streams_GRHQ, drop = TRUE, what = "ZM")
+
+#streams_GRHQs = st_cast(streams_GRHQ, "LINESTRING")
+
+streams<- st_transform(streams, 32198)
+
+streams <- st_make_valid(streams)
+
+# have to save as shape file 
+st_write(streams, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QCstreams_central.shp")
+
+## Pre-processing
+# for these whitebox tools you have to specify actual saved file locations not just R objects
+#should burn in streams first then breach depressions
+# though note that burning in streams isn't always necessary! only if in flat area or if there is a bridge over top of site or something 
+# burn in the streams
+
+wbt_fill_burn(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198.tif", 
+              streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QCstreams_central.shp", 
+              output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198_fillburn.tif")
+
+# change this to flow accumulation workflow
+# it does the breach depressions, flow pointer, and flow accumulation raster all in one step! 
+
+wbt_flow_accumulation_full_workflow(
+  dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198_fillburn.tif", out_dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_32198_fillburn_breached.tif", out_pntr = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Central_DEM_d8pointer.tif", out_accum = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_d8accum.tif", out_type = "cells")
+
+# it worked! 
+# check these layers in Arc! not here (won't be able to see enough detail here)
+#zoom in to streams and make sure it looks good
+
+# ok now to determine the threshold we want to use to extract streams, we need to load into Arc
+#load pour points and flow accumulation layer and look for typical stream values and use that to inform choice of threshold. so anything higher than threshold is  called a stream 
+ 
+## Generate streams with a stream initiation threshold of 2000
+#based on visual inspection, the smallest stream near the sites had a value of 2100
+wbt_extract_streams(flow_accum = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/DEM_Central_d8accum.tif",output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Central_32198_DEM_streams.tif", threshold = 2000)
+
+#ok create the pour points from the site locations 
+      
+## Create the watershed
+### Snap the pour point to the streams
+#dist is in units of map (so metres)
+ wbt_jenson_snap_pour_points(pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Centralref_pp.shp",
+                                  streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Central_32198_DEM_streams.tif", 
+                                  snap_dist = 100, 
+                                  output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Centralref_ppsnap.shp")
+
+## Create the watersheds
+      wbt_watershed(
+            d8_pntr = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Central_DEM_d8pointer.tif",
+            pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Centralref_ppsnap.shp",
+            output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCCentral_refcatchments.tif")
+      
+QCcentral_refcatchments <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCCentral_refcatchments.tif")
+
+#this worked best to convert to polygons 
+wbt_raster_to_vector_polygons(input = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCCentral_refcatchments.tif", output ="//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCCentral_refcatchments.shp" )
+
+# Join polygons from the two regions together and assign ref system 
+Central_refs <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/QCCentral_refcatchments.shp")
+
+Gaspe_refs <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gaspe_refcatchments1.shp")
+
+QC_ref_sheds <- rbind(Central_refs, Gaspe_refs)
+  
+QC_ref_sheds <- st_set_crs(QC_ref_sheds, 32198)
+
+QC_ref_sheds$FID <- 1:nrow(QC_ref_sheds)
+  
+QC_ref_sheds <- QC_ref_sheds %>% dplyr::select(FID, geometry)
+  
+st_write(QC_ref_sheds, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/QC_ref_sheds.shp")
+
+# there were some issues with the watershed boundaries coming up with weird areas and issues in my spfir/defo scripts too 
+# i ran the "Repair geometry tool in Arc and this fixed the issues 
+
+# join site locations together too 
+
+Central_sites <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Centralref_ppsnap.shp")
+
+Gaspe_sites <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/QC_DEM/Gasperef_ppsnap.shp")
+
+QC_ref_sites <- rbind(Central_sites, Gaspe_sites)
+
+st_write(QC_ref_sites, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/QC_ref_sites.shp")
+```
+
+# Catchment Characteristics
+- generated catchment characteristics in ArcMap
+- pull in all the excel files exported from Arc
+- restrict to match Gaspesie sites
+
+Gaspe Site Ranges + Restrictions for References: 
+- watershed size = 6 - 10 km2 , increasing this one to 5 to 40km2 
+- mean elevation is 250 to 800, keep anything > 100m
+- stream order = 2 or 3
+- mean aspect = 140 to 220
+- slope is 5 - 20
+
+
+```{r}
+library(readxl)
+
+RefShed_codes_Gaspe <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "GaspeRefSheds")
+
+RefShed_codes_Central <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "CentralRefSheds")
+
+Elevation_GaspeRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Elevation_GaspeRef.xls") 
+
+Elevation_GaspeRef <- Elevation_GaspeRef %>%
+  full_join(RefShed_codes_Gaspe, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Elevation_CentralRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Elevation_CentralRef.xls")
+
+Elevation_CentralRef <- Elevation_CentralRef %>%
+  full_join(RefShed_codes_Central, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Elevation <- as.data.frame(rbind(Elevation_CentralRef, Elevation_GaspeRef)) %>%
+  rename(elev_mean = MEAN ) %>%
+   rename(elev_min = MIN) %>%
+   rename(elev_max = MAX) %>%
+   rename(elev_std = STD) %>%
+  rename(area.m2 = AREA) %>%
+   mutate(area.km2 = (area.m2/1000000)) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE)
+
+Aspect_GaspeRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Aspect_GaspeRef.xls")
+
+Aspect_GaspeRef <- Aspect_GaspeRef %>%
+  full_join(RefShed_codes_Gaspe, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Aspect_CentralRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Aspect_CentralRef.xls")
+
+Aspect_CentralRef <- Aspect_CentralRef %>%
+  full_join(RefShed_codes_Central, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Aspect <- as.data.frame(rbind(Aspect_CentralRef, Aspect_GaspeRef)) %>%
+  rename(aspect_mean = MEAN) %>%
+   rename(aspect_min = MIN) %>%
+   rename(aspect_max = MAX) %>%
+   rename(aspect_std = STD) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE, -AREA)
+
+Slope_GaspeRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Slope_GaspeRef.xls")
+
+Slope_GaspeRef <- Slope_GaspeRef %>%
+  full_join(RefShed_codes_Gaspe, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Slope_CentralRef <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Slope_CentralRef.xls")
+
+Slope_CentralRef <- Slope_CentralRef %>%
+  full_join(RefShed_codes_Central, by = "FID_1") %>%
+  dplyr::select(-FID, -Rowid)
+
+Slope <- as.data.frame(rbind(Slope_CentralRef, Slope_GaspeRef)) %>%
+  rename(slope_mean = MEAN) %>%
+   rename(slope_min = MIN) %>%
+   rename(slope_max = MAX) %>%
+   rename(slope_std = STD) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE, -AREA)
+
+#combine this all and get site codes in there 
+refshed_characteristics <- Elevation %>%
+  full_join(Slope, by = c("Site", "FID_1")) %>%
+   full_join(Aspect, by = c("Site", "FID_1")) %>%
+  dplyr::relocate(Site, .after = "FID_1")
+
+#write_rds(refshed_characteristics, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/refshed_characteristics.rds")
+
+# check area
+QC_ref_sheds <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/QC_ref_sheds.shp")
+
+RefShed_codes <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "RefSheds") %>%
+  dplyr::select(-FID)
+#  dplyr::rename(FID = FID_1)
+
+QC_ref_sheds <- QC_ref_sheds %>% 
+  full_join(RefShed_codes, by = "FID_1") %>%
+  dplyr::mutate(area_m2 = st_area(QC_ref_sheds),
+                area_km2 = area_m2/1000000)
+
+#write_rds(QC_ref_sheds, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/QC_ref_sheds.rds")
+
+rm(Aspect, Aspect_CentralRef, Aspect_GaspeRef, Slope, Slope_CentralRef, Slope_GaspeRef, Elevation, Elevation_CentralRef, Elevation_GaspeRef)
+
+# filtered down characteristics
+refshed_characteristics_filter <- refshed_characteristics %>%
+    filter(Site %in% c("PFO001", "BER001", "BDR001", "ASC001", "PGA001", "MOR001"))
+
+```
+
+# Spruce Fir and Defo in Ref Sheds 
+
+### Quebec 
+
+- put through the defo/spruce fir script (02  script adapted from main SBWD repo) 
+- we are not hydroweighting it right now (03 script) as we want no defo anyways so not necessary 
+- Then pull back in here, and evaluate range of defo and spfir 
+- the QC invert samples collected up to 2018
+- we only have defoliation occurring in the reference sites in BER001 in 2017 (defo avg. =1) and BER001 and PFO001 in 2018 (defo avg = 1) and those two sites only had samples collected in 2008 so doesn't matter 
+
+```{r}
+ QCref_defo_polys <- readRDS("//s-ssm-008/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/QCref_defo_polys.RDS")
+
+# get the spatial average spfir cover and average defo per watershed per year
+
+ QCref_defo_polys$area <- st_area(QCref_defo_polys)
+ 
+QCref_defo_polys_weighted_avg <- QCref_defo_polys %>%
+  group_by(watershed, year) %>%
+  summarise(weighted_avg_defo = sum(Defo * area) / sum(area), 
+            weighted_avg_spfir = sum(SpFir * area) / sum(area))
+
+  spfir_weighted_avg <- QCref_defo_polys %>%
+  filter(year == "2019") %>%
+  group_by(watershed) %>%
+  summarise(weighted_avg_spfir = sum(SpFir * area, na.rm = TRUE) / sum(area))
+  
+### ok we need to use this for spfir
+  # there are no defo polygons for a lot of areas so the defo file doesnt work (especially for central )
+QCref_FRI <- readRDS("//s-ssm-008/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/QCref_forest_cover.RDS")
+
+  spfir_avg <- QCref_FRI %>%
+  group_by(site) %>%
+  summarise(weighted_avg_spfir = sum(replace(SpFir, is.na(SpFir), 0) * shape_area) / sum(shape_area), 
+            weighted_avg_Hardwood = sum(replace(Hardwood, is.na(Hardwood), 0) * shape_area) / sum(shape_area), 
+            weighted_avg_other = sum(replace(other, is.na(other), 0) * shape_area) / sum(shape_area)) 
+  
+    spfir_avg1 <-spfir_avg %>%
+      group_by(site) %>%
+ mutate(total = sum(weighted_avg_spfir + weighted_avg_Hardwood + weighted_avg_other))
+    
+### WE need to restrict to only sheds with NO defo and SpFir > 50% 
+  ## MOR001 is on the fence - including for now
+QC_ref_sheds_filter <- QC_ref_sheds %>%
+  filter(Site %in% c("PFO001", "BER001", "BDR001", "ASC001", "PGA001", "MOR001"))
+
+## now move back to Jan2025 script 
+
+#write_rds(QC_ref_sheds_filter, file = ""//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/final_QC_refsheds.rds")
+```
+
+# New Brunswick
+
+# Download all of the NB DEM files
+
+```{r}
+# pull in the list of URLS
+library(readr)
+NB_DEM_URLs <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/NB_DEM_URLs.csv", col_names = FALSE)
+
+NB_DEM_URLs <- NB_DEM_URLs %>%
+  rename(URL = X1)
+
+
+NB_DEM_URLs$URL <- str_trim(NB_DEM_URLs$URL)
+
+   ### Download DTMs
+## this works to start, but if you have to restart it part way through, need to use the bottom loop 
+
+options(timeout = 1000)
+
+      for(ftp in 1:nrow(NB_DEM_URLs)){
+download.file(NB_DEM_URLs$URL[ftp], destfile = paste0("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/NB_DEM/",
+str_extract(NB_DEM_URLs$URL[ftp], "[[:alnum:]_]+.tif$")), method = "libcurl", mode = "wb", )
+                  Sys.sleep(sample(10:60, size  = 1))
+      }
+
+#example code:
+# If we have to restart any downloads, then need to edit this so that if it's already been done, #says if file does not exist, then download it 
+     for(ftp in 1:nrow(NB_DEM_URLs)){
+            if(!file.exists(paste0("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/NB_DEM/", str_extract(NB_DEM_URLs$URL[ftp], "[[:alnum:]_]+.tif$")))){
+download.file(NB_DEM_URLs$URL[ftp], destfile = paste0("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/NB_DEM/",
+str_extract(NB_DEM_URLs$URL[ftp], "[[:alnum:]_]+.tif$")), method = "libcurl", mode = "wb",)
+                  Sys.sleep(sample(10:60, size  = 1))
+      }
+     } 
+            
+```
+
+# Create NB vrt 
+
+```{r}
+Ref_Locations_NB <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_NB.csv")
+
+site_locations_NB <- st_as_sf(x=Ref_Locations_NB, 
+                    coords = c("Longitude", "Latitude"), 
+                    crs = "+proj=longlat +ellps=GRS80 +datum=NAD83 +no_defs +towgs84=0,0,0")
+                      #coord is nad 83
+
+files_NB <- list.files("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/NB_DEM", full.names = T)
+
+vrt(grep("nb.+tif", 
+        files_NB, 
+         value = T), 
+    filename = paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/", "NBref_dem_take3.vrt"), 
+    overwrite = T)
+
+#plot it
+vrt_NB <- terra::rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NBref_dem.vrt")
+
+point_data_transformed <- st_transform(site_locations_NB , crs = st_crs(vrt_NB))
+
+plot(vrt_NB)
+#adding the points only works in the console for some reason
+#points(point_data_transformed, col = "red")
+
+# ok we are missing a big chunk in the middle and had the warning that 70 file were not included
+#use thhis function to find out which files WERE included and compare to download list
+
+NBvrt_files <- as.data.frame(vrt_tiles(vrt_NB)) 
+
+NBvrt_files <- NBvrt_files %>% rename(files_NB = "vrt_tiles(vrt_NB)")
+
+files_NB <- as.data.frame(files_NB)
+
+#anti join
+# which files not in both 
+
+missing_files1 <- files_NB %>%
+  anti_join(NBvrt_files, by = "files_NB")
+
+#vrt creation step skipped 71 files. Tried creating using this funciton instead: gdalbuildvrt from Gdal Utilities. THis one gave more info on what the error was:
+library(gdalUtilities)
+#try this function 
+gdalbuildvrt(gdalfile = grep("nb.+tif", 
+        files_NB, 
+         value = T), 
+    output.vrt = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NBref_dem_take4.vrt")
+
+# we have a different projection for 71 tiles (for some unknown reason......)
+#created a loop to reproject them. 
+
+#try with just missing files
+missing_test <- as.character(missing_files$files_NB)
+#ff <- list.files(path='mydir', pattern = "\\.tif$")
+fn <- gsub("\\.tif$", "_prj.tif", missing_test)
+newproj <- "+init=epsg:2953"
+
+for (i in 1:71){
+      r <- raster(missing_test[i])
+      prj <- projectRaster(r, crs=newproj, method = 'bilinear', filename = fn[i], overwrite=TRUE)
+  }
+
+# ok now retry the vrt creation 
+#have 932 files now because i didn't overwrite the originals, just added prj to file name to denote projection 
+#so it should still skip 70ish files 
+files_NB <- list.files("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/NB_DEM", full.names = T)
+
+vrt(grep("nb.+tif", 
+        files_NB, 
+         value = T), 
+    filename = paste0("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/", "NBref_dem.vrt"), 
+    overwrite = T)
+
+#plot it
+vrt_NB <- terra::rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NBref_dem.vrt")
+
+point_data_transformed <- st_transform(site_locations_NB , crs = st_crs(vrt_NB))
+
+plot(vrt_NB)
+#adding the points only works in the console for some reason
+#points(point_data_transformed, col = "red")
+
+# ok now aggregate it and get rid of any holes 
+
+NB.10M <- aggregate(vrt_NB, fact = 10, cores= 10)
+
+# the aggregate step was in there from Emily's code
+
+## Get rid of the NA holes along the borders between rasters
+NB_DEM <- terra::focal(NB.10M, fun = mean, na.policy = "only", na.rm = T)
+
+writeRaster(NB_DEM, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM.tif", overwrite = T)
+
+# check again with plot
+plot(NB_DEM)
+points(point_data_transformed, col = "red")
+
+```
+
+# delineate NB watersheds
+
+```{r}
+# load and project DEM 
+#NB_DEM <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM.tif")
+
+#NB Stereographic 
+NB_DEM_2953 <- terra::project(x = NB_DEM, 
+                 y = "+init=epsg:2953",
+                method = "bilinear")
+
+writeRaster(NB_DEM_2953, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953.tif", overwrite = TRUE)
+
+## sites already loaded from above and projection is good 
+#sites <- read_csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Ref_Locations_NB.csv")
+
+#sites <- st_make_valid(sites)
+
+#NB_DEM_2953 <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953.tif")
+
+# save sites as .shp file for processing later on (pp for pour points)
+#also make sure we have a 'site' column in lower case
+crs(point_data_transformed)
+
+sites_transformed <- st_transform(point_data_transformed, crs = st_crs(NB_DEM_2953)) %>%
+  dplyr::rename(site = Site)
+
+st_write(sites_transformed, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_pp.shp", append = FALSE)
+
+# check with plot
+plot(NB_DEM_2953)
+points(sites_transformed, col = "red")
+
+#load streams
+
+streams <- st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/hydrographic_provincial/NB/NBHN_Watercourse/NBHN_Watercourse_Cours.shp")
+
+crs(streams)
+
+#no zm or multi strings so no conversions here
+#convert multiline string to string ?
+#streams <- st_zm(streams, drop = TRUE, what = "ZM")
+
+streams = st_cast(streams, "LINESTRING")
+
+streams<- st_transform(streams, 2953)
+
+streams <- st_make_valid(streams)
+
+streams <- streams %>%
+  dplyr::select(-NID, -NAMEID1, -NAMEID2, -LOCALNAMEI, -LOCALNAME, -NAME1, -NAME2)
+
+# have to save as shape file 
+st_write(streams, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NBstreams.shp")
+
+## Pre-processing
+# for these whitebox tools you have to specify actual saved file locations not just R objects
+#should burn in streams first then breach depressions
+# though note that burning in streams isn't always necessary! only if in flat area or if there is a bridge over top of site or something 
+# burn in the streams
+
+wbt_fill_burn(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953.tif", 
+              streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NBstreams.shp", 
+              output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn1.tif")
+
+# separate it out as it failed doing full workflow 
+
+## Breach any depressions
+wbt_breach_depressions(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn1.tif", output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn_breached1.tif")
+
+## Generate the Flow pointer accumulation in units of cells
+ wbt_d8_pointer(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn_breached1.tif", output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8pointer1.tif")
+ 
+ #what if we try the flow pointer with just streams burnt in but not breached?
+ #or with just the raw DEM?
+ ## Generate the Flow pointer accumulation in units of cells
+ wbt_d8_pointer(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn1.tif", output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8pointer2.tif")
+ 
+wbt_d8_pointer(dem = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953.tif", output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8pointer3.tif")
+           
+            
+## generate d8 flow accumulation in units of cells
+            
+wbt_d8_flow_accumulation(input = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_fillburn_breached1.tif", output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8accum1.tif", out_type = "cells")
+
+# check these layers in Arc! not here (won't be able to see enough detail here)
+#zoom in to streams and make sure it looks good
+
+#ok now to determine the threshold we want to use to extract streams, we need to load into Arc
+#load pour points and flow accumulation layer and look for typical stream values and use that to inform choice of threshold. so anything higher than threshold is  called a stream 
+# I think it needs to be quite low. small streams had values of around 50 to 100. most non stream areas are under 5, 20 max 
+ 
+## Generate streams with a stream initiation threshold of 5000
+#based on visual inspection, the smallest stream had a value of 7500 (I think, didnt check every single one)
+wbt_extract_streams(flow_accum = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8accum1.tif",output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_streams1.tif", threshold = 5000)
+
+#ok create the pour points from the site locations 
+      
+## Create the watershed
+### Snap the pour point to the streams
+#dist is in units of map (so metres)
+ wbt_jenson_snap_pour_points(pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_pp.shp",
+                                  streams = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_2953_streams1.tif", 
+                                  snap_dist = 100, 
+                                  output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_ppsnap1.shp")
+
+## Create the watersheds
+      wbt_watershed(
+            d8_pntr = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_DEM_d8pointer1.tif",
+            pour_pts = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_ppsnap1.shp",
+            output = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.tif")
+    
+#pull them in (they are rasters)  
+NB_refcatchments <- rast("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.tif")
+
+#this worked best to convert to polygons 
+wbt_raster_to_vector_polygons(input = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.tif", output ="//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.shp" )
+
+# pull back in as polygons and confirm coord syst
+#NB_ref_sheds <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.shp")
+
+# if there are any issues with watershed boundaries may need to run the "Repair geometry" tool in Arc 
+```
+
+# Catchment Characteristics
+- ran this in Arc 
+- then pulled in all the excel files exported from Arc
+- restrict to match SBWD sites 
+
+```{r}
+### change all this to whatever NB file names are
+
+library(readxl)
+
+RefShed_codesNB <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "NBRefSheds") %>%
+ dplyr::filter(!Site %in% c("ATLCBNB-01B", "NB01AR0156B", "CAT-DSB", "CAT-USB")) #remove the A ones 
+RefShed_codesNB$FID_1 <- as.numeric(RefShed_codesNB$FID_1)
+
+Elevation_NB <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Elevation_NB.xls") 
+
+Elevation_NB <- Elevation_NB %>%
+  left_join(RefShed_codesNB, by = "FID_1") %>%
+  dplyr::select(-FID)
+
+Elevation <- as.data.frame(Elevation_NB) %>%
+  rename(elev_mean = MEAN ) %>%
+   rename(elev_min = MIN) %>%
+   rename(elev_max = MAX) %>%
+   rename(elev_std = STD) %>%
+  rename(area.m2 = AREA) %>%
+   mutate(area.km2 = (area.m2/1000000)) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE)
+
+Aspect_NB <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Aspect_NB.xls")
+
+Aspect_NB <- Aspect_NB %>%
+  full_join(RefShed_codesNB, by = "FID_1") %>%
+  dplyr::select(-FID)
+
+Aspect <- as.data.frame(Aspect_NB) %>%
+  rename(aspect_mean = MEAN) %>%
+   rename(aspect_min = MIN) %>%
+   rename(aspect_max = MAX) %>%
+   rename(aspect_std = STD) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE, -AREA)
+
+Slope_NB <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/SBWD_RefSheds/Slope_NB.xls")
+
+Slope_NB <- Slope_NB %>%
+  full_join(RefShed_codesNB, by = "FID_1") %>%
+  dplyr::select(-FID)
+
+Slope <- as.data.frame(Slope_NB) %>%
+  rename(slope_mean = MEAN) %>%
+   rename(slope_min = MIN) %>%
+   rename(slope_max = MAX) %>%
+   rename(slope_std = STD) %>%
+  dplyr::select(-SUM, -COUNT, -RANGE, -AREA)
+
+#combine this all and get site codes in there 
+NBrefshed_characteristics <- Elevation %>%
+  full_join(Slope, by = c("Site", "FID_1")) %>%
+   full_join(Aspect, by = c("Site", "FID_1")) %>%
+  dplyr::relocate(Site, .after = "FID_1")
+
+NBrefshed_characteristics <- NBrefshed_characteristics %>%
+  dplyr::select(-OBJECTID.x, -OBJECTID.y) %>%
+  full_join(SpFIR_watershed, by = "FID_1") %>%
+  na.omit()
+
+#join spfir to this too (from below code chunk )
+
+
+write_rds(NBrefshed_characteristics, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/NBrefshed_characteristics.rds")
+
+# check area
+NB_ref_sheds <- st_read("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/NB_DEM/NB_refcatchments1.shp")
+
+#refshed codes if necessary 
+#RefShed_codes <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "NB") %>%
+#  dplyr::select(-FID)
+
+NB_ref_sheds <- NB_ref_sheds %>% 
+  full_join(RefShed_codes, by = "FID_1") %>%
+  dplyr::mutate(area_m2 = st_area(NB_ref_sheds),
+                area_km2 = area_m2/1000000)
+
+write_rds(NB_ref_sheds, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/NB_ref_sheds.rds")
+
+rm(Aspect, Aspect_GaspeRef, Slope, Slope_GaspeRef, Elevation, Elevation_GaspeRef)
+
+```
+
+# Spruce Fir and Defo in Ref Sheds 
+
+### NB  
+
+- check spfir, defo and harvesting here 
+- visuallly checked Defo in Arc - none in our watersheds 
+
+```{r}
+
+NB_defo <- st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/remote_sensing_provincial/NB/Aerial_Survey_Results/Aerial_Survey_Results_Résultats_des_levés_aériens.shp")
+
+# filter to SBW and UK for unknown
+# filter to trees type FS for fir and spruce 
+
+NB_defo <- NB_defo %>%
+  dplyr::filter(DAMAGE_CAU %in% c("SBW", "UK")) %>%
+  dplyr::filter(TREES_TYPE == "FS")
+
+#ok now for defo they have categories 1-5
+# need to make consistent with our 1-3 for Quebec
+#1 - None- 0%
+#2 - Trace = 1-5%
+#3 - Light - 6-30%
+#4 - Moderate - 31 to 70% 
+#5 - severe - > 70% 
+
+# so to make consistent with our data, need to rejig it
+# change 1s to 0s
+# change 2s to 0.5s
+# change 3s to 1s
+# change 4s to 2s 
+# change 5s to 3s
+NB_defo <- NB_defo %>%
+  mutate(Defo = ifelse(DEFOLIATIO == "1", "0", ifelse(DEFOLIATIO == "2", "0.5", ifelse(DEFOLIATIO == "3", "1", ifelse(DEFOLIATIO == "4", "2", "3")))))
+
+#Mortality has the same categories... 
+# change 1 and 2 to 0
+# change 3 to 1 
+# change 4 to 2
+# change 5 to 3
+
+NB_defo <- NB_defo %>%
+  mutate(Mort_numeric = ifelse(MORTALITY_ == "1", "0", ifelse(MORTALITY_ == "2", "0", ifelse(MORTALITY_ == "3", "1", ifelse(MORTALITY_ == "4", "2", "3"))))) %>%
+  mutate(Mort_cat = ifelse(Mort_numeric %in% c("1", "2", "3"), "Mort", "NoMort"))
+# if want just mort or not, could change 3,4,5 to Mort
+
+# then we also have a distribution value
+# this is whether it is patchy (1), scattered (2), or widespread (3)
+#not including for now, but might want to .... 
+
+#ok now we need to transform it to the same projection 
+# and then intersect it with the ref sheds 
+
+NB_ref_sheds <- read_rds("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/NB_ref_sheds.rds")
+
+NB_ref_defo <- NB_defo %>%
+st_transform(st_crs(NB_ref_sheds)) %>% 
+st_intersection(st_buffer(NB_ref_sheds, 10))
+
+write_rds(NB_ref_defo, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/NBref_defo_polys.RDS")
+write_sf(NB_ref_defo, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/NBref_defo_polys.shp")
+
+# get the spatial average defo per watershed per year
+NBref_defo_polys <- read_rds("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/ReferenceSheds/NBref_defo_polys.RDS")
+
+NBref_defo_polys$area <- st_area(NBref_defo_polys)
+ 
+NBref_defo_polys_weighted_avg <- NBref_defo_polys %>%
+  group_by(watershed, year) %>%
+  summarise(weighted_avg_defo = sum(Defo * area) / sum(area))
+
+#don't both combining spfir with defo for now, just look at them separate
+
+# ok now pull in spfir 
+#NB FRI is contained in multiple shp files that need to be joind together 
+NB_FRI_1 <- st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/landcover_provincial/NB/gnb_forestry/2024/Forest_R1_2_Forestières_R1_2.shp")
+
+NB_FRI_2 <- st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/landcover_provincial/NB/gnb_forestry/2024/Forest_R3_4_5_Forestières_R3_4_5.shp")
+
+NB_FRI_3 <- st_read("//132.156.200.8/WatershedEcol_b/wet_spatial_raw/landcover_provincial/NB/gnb_forestry/2024/Forest_R6_7.shp")
+
+#join them 
+NB_FRI <- rbind(NB_FRI_1, NB_FRI_2, NB_FRI_3)
+
+watersheds <- st_set_crs(NB_ref_sheds, 2953)
+
+# then clip them all to our watersheds and save so we don't have to load this all in everytime
+
+crs(watersheds)
+crs(NB_FRI)
+
+NB_ForCov_clipped <- st_intersection(NB_FRI, st_buffer(st_transform(watersheds, st_crs(NB_FRI)), 50))
+
+
+rm(NB_FRI) 
+
+#now filter down. all we care about right now is % spfir
+# i like to do % hardwood and %other too just make sure it is all jiving
+
+#H4YR column gives the year of most recent harvest 
+# we also have a harvest layer we can look at 
+#L1FUNA gives species comp
+
+#ok so L1S1 - L1S5 gives the top 5 dominant species and L1PR1 gives the percent associated with each one 
+# 1 = 10%, 7 - 70%, 10 = 100%, etc. 
+
+#spruce and fir codes that we want for L1S1-L1S5
+#BS for Black spruce
+#FS - mix of fir and spruce (Fir dominant)
+#BF for balsam fir 
+#RS - red spruce -  include for now
+#SF - mix of spruce and fir, spruce dominant
+#SP - red or white spruce
+# SW - mixed softwood stand - assume spfir 
+# WS - white spruce
+#MS is multiple species
+# NR is natural regeneration, species unknown
+
+
+# lets simplify this and just use the forest type code L1FUNA
+# 
+SpFIR_cover <- NB_ForCov_clipped %>%
+  mutate(SpFir = ifelse(L1FUNA == "WSPR" | L1FUNA == "PSBS" | L1FUNA == "BSPR" | L1FUNA =="SPRC" | L1FUNA =="BFIR"| L1FUNA == "BFSP"| L1FUNA == "BSBF" | L1FUNA == "RSBF" | L1FUNA == "SPBF" | L1FUNA == "TOSW", "100", ifelse(L1FUNA == "TOMX"| L1FUNA == "SPMX" | L1FUNA == "BFMX", "50", "0"))) 
+
+SpFIR_cover1 <- SpFIR_cover %>%
+  mutate(SpFir2 = ifelse(L2FUNA == "WSPR" | L2FUNA == "PSBS" | L2FUNA == "BSPR" | L2FUNA =="SPRC" | L2FUNA =="BFIR"| L2FUNA == "BFSP"| L2FUNA == "BSBF" | L2FUNA == "RSBF" | L2FUNA == "SPBF" | L2FUNA == "TOSW", "100", ifelse(L2FUNA == "TOMX"| L2FUNA == "SPMX" | L2FUNA == "BFMX", "50", "0"))) 
+
+#ok now need to join! 
+# if SpFir is 0, pull spfir2, otherwise, keep spfir 
+SpFIR_cover2 <- SpFIR_cover1 %>%
+  mutate(spfir_final = ifelse(SpFir == "0", SpFir2, SpFir))
+
+#now coaelesce spfir2 and spfir final into final 
+SpFIR_cover3 <- SpFIR_cover2 %>%
+  mutate(spfir_final2 = coalesce(spfir_final, SpFir2))
+
+SpFIR_cover3$spfir_final2 <- as.numeric(SpFIR_cover3$spfir_final2)
+
+#now just try the spatial average?
+SpFIR_watershed <- SpFIR_cover3 %>%
+  group_by(FID_1) %>%
+  summarise(weighted_avg_spfir =  sum(replace(spfir_final2 , is.na(spfir_final2), 0) * SHAPEAREA) / sum(SHAPEAREA))
+
+# need to check Harvesting! 
+# need less than 15% in the last 15 years
+# difficult when we have so many years of kicks per site
+# CAT-US only sampled in 2012 (check harvest from 1997 to 2012)
+#NBRDG1007 and  MCAL01 only in 2018 (check harvest from 2003 to 2018)
+# PWR2, PWR6, USR4, GR1 from 2008 to 2023 (check harvest from 1993 to 2023, maybe can just keep some years?)
+
+#I'm just going to do each one here separately I think
+#CAT-US = FID_1 8 
+Harvest_CAT <- NB_ForCov_clipped %>%
+  filter(FID_1 == "8") %>%
+    filter(H1YR < 2013 & H2YR < 2013) %>%
+  filter(H1YR > 1997 | H2YR > 1997) 
+
+CAT <- NB_ForCov_clipped %>%
+  filter(FID_1 == "8")
+
+Prop_Harv_CAT <- sum(Harvest_CAT$SHAPEAREA)/sum(CAT$SHAPEAREA)
+#25% harvested in last 15 years, drop this one 
+
+#NBRDG1007 = FID_1 7 
+Harvest_NBR <- NB_ForCov_clipped %>%
+  filter(FID_1 == "7") %>%
+    filter(H1YR < 2019 & H2YR < 2019) %>%
+  filter(H1YR > 2002 | H2YR > 2002) 
+
+NBR <- NB_ForCov_clipped %>%
+  filter(FID_1 == "7")
+
+Prop_Harv_NBR <- sum(Harvest_NBR$SHAPEAREA)/sum(NBR$SHAPEAREA)
+#11% harvested in last 15 years 
+
+# MCAL01 = FID_1 49
+Harvest_MC<- NB_ForCov_clipped %>%
+  filter(FID_1 == "49") %>%
+    filter(H1YR < 2019 & H2YR < 2019) %>%
+  filter(H1YR > 2002 | H2YR > 2002) 
+
+MC <- NB_ForCov_clipped %>%
+  filter(FID_1 == "49")
+
+Prop_Harv_MC <- sum(Harvest_MC$SHAPEAREA)/sum(MC$SHAPEAREA)
+#10% harvested in last 15 years 
+
+
+#ok these other ones have a lot more years so more complex
+# PWR2, PWR6, USR4, GR1 from 2008 to 2023 (check harvest from 1993 to 2023, maybe can just keep some years?) 1993 to 2008, 1999-2014, 2004-2019, 2008 to 2023
+
+# PWR2 = FID_1 38
+#that was easy, no harvest at all - seems odd, maybe protected area?
+PWR2 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "38")
+
+# PWR6 = FID_1 38
+#that was easy, no harvest post 1983
+PWR6 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "32")
+
+# USR4 = FID_1 30
+#minimal harvest up to 1998 it looks like. so calculate for the 2008 sample year 
+USR4 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "30")
+
+Harvest_USR4  <- NB_ForCov_clipped %>%
+  filter(FID_1 == "30") %>%
+    filter(H1YR < 2009 & H2YR < 2009) %>%
+  filter(H1YR > 1992 | H2YR > 1992) 
+
+Prop_Harv_USR4 <- sum(Harvest_USR4$SHAPEAREA)/sum(USR4$SHAPEAREA)
+#only 2%, perfect
+
+#GR1 FID = 43
+#some harvest up to 2004, one small piece in 2010
+GR1 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "43")
+
+Harvest_GR1A <- NB_ForCov_clipped %>%
+  filter(FID_1 == "43") %>%
+    filter(H1YR < 2009 & H2YR < 2009) %>%
+  filter(H1YR > 1993 | H2YR > 1993) 
+
+Prop_Harv_GR1A  <- sum(Harvest_GR1A$SHAPEAREA)/sum(GR1$SHAPEAREA)
+#10% looks good 
+
+# check up to 2014 too 
+Harvest_GR1B <- NB_ForCov_clipped %>%
+  filter(FID_1 == "43") %>%
+    filter(H1YR < 2013 & H2YR < 2013) %>%
+  filter(H1YR > 1998 | H2YR > 1998) 
+
+Prop_Harv_GR1B  <- sum(Harvest_GR1B$SHAPEAREA)/sum(GR1$SHAPEAREA)
+#2014 is just on the cusp at 16%, but can keep I think 
+
+
+# check 2010 
+Harvest_GR1C <- NB_ForCov_clipped %>%
+  filter(FID_1 == "43") %>%
+    filter(H1YR < 2011 & H2YR < 2011) %>%
+  filter(H1YR > 1995 | H2YR > 1995) 
+
+Prop_Harv_GR1C <- sum(Harvest_GR1C$SHAPEAREA)/sum(GR1$SHAPEAREA)
+#2010 is just on the cusp at 16%, but can keep I think 
+
+
+#so in summary, remove CAT-US as too much harvesting 
+
+
+# lets check KB 1
+# KB1= FID_1 28
+
+KB1 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "28")
+
+Harvest_KB1 <- NB_ForCov_clipped %>%
+  filter(FID_1 == "28") %>%
+    filter(H1YR < 2009 & H2YR < 2009) %>%
+  filter(H1YR > 1992 | H2YR > 1992) 
+
+```
+
+
+# ok now filter down to comparable sites
+- QC ref sheds we kept under 50km2
+
+```{r}
+NBrefshed_characteristics <- readRDS("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/NBrefshed_characteristics.rds")
+
+library(readxl)
+RefShed_codesNB <- read_excel("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefShed_codes.xlsx", sheet = "NBRefSheds") %>%
+ dplyr::filter(!Site %in% c("ATLCBNB-01B", "NB01AR0156B", "CAT-DSB", "CAT-USB")) #remove the A ones 
+RefShed_codesNB$FID_1 <- as.numeric(RefShed_codesNB$FID_1)
+
+NB_filter <- NBrefshed_characteristics %>%
+  dplyr::filter(weighted_avg_spfir > 47) %>%
+  dplyr::filter(elev_mean > 100) %>%
+  dplyr::filter(area.km2 < 50)
+
+#shows 5 here but CAT-US needs to go due to harvesting. 
+#1Holmes and KB-1 have no data in the invert side of things - I don't know why they are in here
+#and remove CAT-Us as it has more than 15% harvest in last 15 years
+#down to 4 NB sites
+NB_ref_sheds_filter <- NB_ref_sheds %>%
+  full_join(RefShed_codesNB, by = "FID_1") %>%
+  filter(Site %in% c("NBRDG1007", "USR4", "PWR6", "MCAL01")) 
+
+## now move back to Jan2025 script 
+
+#write_rds(NB_ref_sheds_filter, file = "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/final_NB_refsheds.rds")
+
+```
+
+# write out a final shape file for 10 reference watersheds 
+
+	- We have 10 watersheds with the ideal conditions 
+		○ 47 samples 
+		○ Samples range from 2008 to 2022
+		○ 4 watersheds only have a sample in 1 year 
+		○ 6 watersheds have 6-9 years of samples
+
+
+```{r}
+NB_sheds <- readRDS("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/final_NB_refsheds.rds") %>%
+    filter(Site %in% c("NBRDG1007", "PWR6", "MCAL01", "USR4")) %>%
+  dplyr::select(-VALUE, -FID)
+
+NB_sheds <- st_set_crs(NB_sheds, 2953)
+
+QC_sheds <- readRDS("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/final_QC_refsheds.rds")
+
+#change to epsg: 3979
+#NAD83
+
+NB_sheds <- st_transform(NB_sheds, 3979)
+
+QC_sheds <- st_transform(QC_sheds, 3979)
+
+Final_RefSheds <- rbind(NB_sheds, QC_sheds)
+
+write_sf(Final_RefSheds, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Final_RefSheds.shp")
+
+NB_sheds_charc <- NBrefshed_characteristics %>% filter(Site %in% c("NBRDG1007", "PWR6", "MCAL01", "USR4"))
+  
+```
+
+
