@@ -30,7 +30,7 @@ McCaig_SBWD <- "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcC
 # CABIN reference data download process
 - CABIN data was downloaded from the online database  https://www.canada.ca/en/environment-climate-change/services/canadian-aquatic-biomonitoring-network/database.html
 	1) Downloaded data in Atlantic Canada + Quebec 
-		- Only downloaded the reference, potential reference, or QAQC sites, not the "test" sites
+		- Only downloaded the reference or potential reference, not the "test" sites
 	  - Downloaded lowest level taxonomy
 
 # Study List that was downloaded: 

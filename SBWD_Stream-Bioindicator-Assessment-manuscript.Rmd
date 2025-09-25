@@ -482,6 +482,7 @@ filter_div <- mort_diversity %>%
 #fix the lowercase on richness
 new_labels <- c(richness = "Richness", Shannon = "Shannon", Evenness = "Evenness")
 
+#add mortality categories, No, Low, High based on 10% and 30% thresholds 
 mort_diversity <- mort_diversity %>%
 mutate(mort_cat = ifelse(site == "U01" & year == "2022", "LowMort",       
                     ifelse( year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
@@ -500,6 +501,46 @@ panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), 
          shape = guide_legend(title = "Tree Mortality")) + theme(legend.position = "bottom")
 
 plot_div_defo
+
+### change this to 3 separate plots and then after we add the ref range info later on we will combine with ggarrange
+## just to be consistent in paper with A B C labels rather than facets 
+
+plot_richness_defo <- mort_diversity %>%
+  filter(diversity_metric == "richness") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
+      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Richness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+ guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+plot_richness_defo
+
+plot_evenness_defo <- mort_diversity %>%
+  filter(diversity_metric == "Evenness") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
+      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Evenness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+plot_evenness_defo 
+
+plot_shannon_defo <- mort_diversity %>%
+  filter(diversity_metric == "Shannon") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
+  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Shannon Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+
+plot_shannon_defo 
 
 ```
 
@@ -787,7 +828,7 @@ plot_EPTdefo <- mort_inverts %>%
         ggscatter(x = "cdefo5y", y = "perc_EPT", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, 
                   cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 100), cor.coef.size = 5) + 
-                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat"))+ labs(x = "Cumulative Defoliation", y = "% EPT Group") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat"))+ labs(x = "Cumulative Defoliation", y = "%EPT") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
   guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
          shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
@@ -826,7 +867,7 @@ plot_chirodefo <- mort_inverts %>%
         ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, 
                   cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
-                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "%Chironomidae") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
 guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
          shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
@@ -836,7 +877,7 @@ guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
 EPT_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_EPT, fill=mort_cat)) +
     geom_boxplot() +
    # stat_summary(fun.y=mean, geom="point", shape=20, size=14, color="red", fill="red") +
-    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "Percent EPT") +
+    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "%EPT") +
     scale_fill_brewer(palette="Dark2") + geom_jitter(width = 0.2) +
   scale_x_discrete(labels = c('Tree Mortality < 10% ','Tree Mortality > 30%')) +  theme_bw(base_size = 16) + theme(legend.position="none")
 
@@ -848,7 +889,7 @@ EPT_mort
 chiro_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_chironomid, fill=mort_cat)) +
     geom_boxplot() +
    # stat_summary(fun.y=mean, geom="point", shape=20, size=14, color="red", fill="red") +
-    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "Percent Chironomids") + geom_jitter(width = 0.2) +
+    theme(legend.position="none") + labs(x = "Study Watershed Type", y = "%Chironomidae") + geom_jitter(width = 0.2) +
     scale_fill_brewer(palette="Dark2") + 
   scale_x_discrete(labels = c('Tree Mortality < 10%','Tree Mortality > 30%')) +  theme_bw(base_size = 16) + theme(legend.position="none")
 
@@ -1203,8 +1244,39 @@ diversity_refs_summary <- diversity_refs %>%
 diversity_refs_summary <- diversity_refs_summary %>%
   filter(diversity_metric %in% c("Shannon", "Evenness", "richness"))
 
+diversity_refs_evenness <- diversity_refs_summary %>%
+  filter(diversity_metric == "Evenness")
+
+diversity_refs_richness <- diversity_refs_summary %>%
+  filter(diversity_metric == "richness")
+
+diversity_refs_shannon <- diversity_refs_summary %>%
+  filter(diversity_metric == "Shannon")
+
+
 #diversity and defo 
 plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+## Try this with the individual plots
+#diversity and defo 
+plot_even_ref <- plot_evenness_defo + geom_hline(data = diversity_refs_evenness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_evenness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+plot_rich_ref <- plot_richness_defo + geom_hline(data = diversity_refs_richness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_richness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+plot_shan_ref <- plot_shannon_defo + geom_hline(data = diversity_refs_shannon, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_shannon, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+## gg arrange for ABC labels
+final_diversity_plot <- ggarrange(plot_even_ref, plot_rich_ref, plot_shan_ref,
+        labels = c("A", "B", "C"),
+         font.label=list(size = 16, color = "black", face = "bold"),
+     common.legend = TRUE,
+         legend = "bottom",
+          #legend.grob = get_legend(p3),
+          ncol = 1, nrow = 3,
+        align = "hv") 
+
+final_diversity_plot
+
 ```
 
 # PCA: Defoliated vs nondefoliated 
@@ -1482,7 +1554,7 @@ gammaplot
 #group factor in separate object 
 pa_data <- all_inverts > 0
   
-group <- factor(c(rep("Defo", 36), rep("Non", 47)))
+group <- factor(c(rep("Defo", 36), rep("Non", 49)))
 
 fisher_pvals <- numeric(ncol(pa_data))
 names(fisher_pvals) <- colnames(pa_data)
