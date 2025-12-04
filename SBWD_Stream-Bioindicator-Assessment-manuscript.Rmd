@@ -380,132 +380,126 @@ inverts_family  <- inverts_family %>%
 
 ### diversity metrics
 
+- switch to Hill based metrics with iNEXT to account for coverage 
+
 ```{r}
+library(iNEXT)
 
-# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
-#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+inverts_round <- inverts %>%
+  mutate(count = round(count))
 
-#fixed this above, so don't think we need family name in genus anymore
-#inverts <- inverts %>%
- # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
-
-### CHANGE TO FAMILY 
-
-#make sure there are no duplicates 
-inverts1 <- inverts %>%
-  dplyr::select(4,6,7,10) %>%
+inv_mat <- inverts_round %>%
+  filter(year != "2019") %>%
+  select(Family, site, year, count) %>%
   group_by(Family, site, year) %>%
-  summarize(count = sum(count))
+  summarize(count = sum(count), .groups = "drop") %>%
+  unite(site_year, site, year, sep = "_") %>%   # keep site-year unique
+  pivot_wider(names_from = Family, values_from = count, values_fill = 0)
 
-a2021 <- filter(inverts1, year == "2021")
-a2022 <- filter(inverts1, year == "2022")
-a2023 <- filter(inverts1, year == "2023")
+inv_mat_df <- as.data.frame(inv_mat)
+rownames(inv_mat_df) <- inv_mat_df$site_year
+inv_mat_df <- inv_mat_df %>% select(-site_year)
 
-#2021
-a2021 <- a2021 %>%
-  dplyr::select(-year) %>%
-  pivot_wider(names_from = "Family", values_from = "count")
+##Convert each row into an abundance vector for iNEXT 
+comm_list <- apply(inv_mat_df, 1, function(x) x[x > 0])
 
-a2021[is.na(a2021)] <- 0
+hill_all <- iNEXT::estimateD(
+  comm_list,
+  q = c(0, 1, 2),
+  datatype = "abundance",
+  base = "coverage"
+)
 
-a2021 <- as.data.frame(a2021)
-rownames(a2021) <- a2021[,1] #change site to row names
-a2021 <- a2021 %>% dplyr::select(-1) #remove site column 
+hill_all <- hill_all %>%
+  separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE) %>%
+  rename(diversity_metric = Order.q, diversity = qD)
 
-#2022
-a2022 <- a2022 %>%
-  dplyr::select(-year) %>%
-  pivot_wider(names_from = "Family", values_from = "count")
+hill_all <- hill_all %>%
+  mutate(diversity_metric = ifelse(diversity_metric == 0, "richness", 
+                                  ifelse(diversity_metric == 1, "Shannon", "InverseSimpson")))
 
-a2022[is.na(a2022)] <- 0
+#calculate Hill Shannon Evenness and Simpsons Evenness
+#shannon sensitive to common species # simpson strongly weights dominant species 
 
-a2022 <- as.data.frame(a2022)
-rownames(a2022) <- a2022[,1] #change site to row names
-a2022 <- a2022 %>% dplyr::select(-1) #remove site column 
 
-#2023
-a2023 <- a2023 %>%
-  dplyr::select(-year) %>%
-  pivot_wider(names_from = "Family", values_from = "count")
+hill_wide <- hill_all %>%
+  select(Assemblage, diversity_metric, diversity) %>%
+  pivot_wider(names_from = diversity_metric, values_from = diversity)
 
-a2023[is.na(a2023)] <- 0
+hill_evenness <- hill_wide %>%
+  mutate(
+    Shannon_Evenness = Shannon / richness,   # Shannon evenness (J')
+    InvSimp_Evenness = InverseSimpson / richness    # Simpson-based evenness
+  )
 
-a2023 <- as.data.frame(a2023)
-rownames(a2023) <- a2023[,1] #change site to row names
-a2023 <- a2023 %>% dplyr::select(-1) #remove site column 
+hill_long <- hill_evenness %>%
+  pivot_longer(cols = c(richness, Shannon, InverseSimpson , Shannon_Evenness, InvSimp_Evenness),
+               names_to = "diversity_metric",
+               values_to = "diversity")
 
-sites <- as.data.frame(row.names(a2023)) %>%
-  dplyr::rename(site = "row.names(a2023)")
+hill_long <- hill_long %>%
+  separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE)
 
-# ok now its ready to actual run the metrics with vegan
-#Pileaus evenness is shannon div/richness
-
-diversity_2021 <- data.frame(sites, Shannon = diversity(a2021, index="shannon"),
-                             InverseSimpson = diversity(a2021, index="invsimpson"),
-                             richness = specnumber(a2021)) %>%
-        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2021")
-
-diversity_2022 <- data.frame(sites, Shannon = diversity(a2022, index="shannon"),
-                             InverseSimpson = diversity(a2022, index="invsimpson"),
-                             richness = specnumber(a2022)) %>%
-        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2022")
-
-diversity_2023 <- data.frame(sites, Shannon = diversity(a2023, index="shannon"),
-                             InverseSimpson = diversity(a2023, index="invsimpson"),
-                             richness = specnumber(a2023)) %>%
-        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity")%>% mutate(year = "2023")
-
-#combine it all
-diversity_inverts <- rbind(diversity_2021, diversity_2022, diversity_2023)
-
-diversity_inverts$site <- diversity_inverts$site %>%    
+hill_long$site <- hill_long$site %>%    
         factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
 
-mort_diversity <- defoliation_data %>%
- full_join(diversity_inverts, by = c("site", "year"))
+mort_hilldiversity <- mortality %>%
+ full_join(hill_long, by = c("site", "year")) %>%
+  dplyr::filter(year %in% c("2021", "2022", "2023"))
 
 #2023 all metrics 
 
 diversity_labs <- c(`InverseSimpson` = "Inverse Simpson's",
-                    `richness` = "Genus Richness",
+                    `richness` = "Richness",
                     `Shannon` = "Shannon Diversity",
-                    `Evenness` = "Evenness")
+                    `Shannon_Evenness` = "Evenness (Shannon-based)",
+                    `InvSimp_Evenness` = "Evenness (Simpson-based)")
 
-mort_diversity$diversity_metric <- mort_diversity$diversity_metric %>%
-                  factor(levels = c("richness", "Shannon", "InverseSimpson", "Evenness"))
+mort_hilldiversity$diversity_metric <- mort_hilldiversity$diversity_metric %>%
+                  factor(levels = c("richness", "Shannon", "InverseSimpson", "Shannon_Evenness", "InvSimp_Evenness"))
 
-filter_div <- mort_diversity %>%
-  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+filter_div <- mort_hilldiversity %>%
+ # filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
   filter(site %in% c("U01", "U02")) %>%
   filter(year == "2023")
+
+filter_div_sig <- mort_hilldiversity %>%
+  filter(year == "2022") %>%
+  filter(diversity_metric %in% c("Evenness", "Shannon"))
 
 #fix the lowercase on richness
 new_labels <- c(richness = "Richness", Shannon = "Shannon", Evenness = "Evenness")
 
-#add mortality categories, No, Low, High based on 10% and 30% thresholds 
-mort_diversity <- mort_diversity %>%
+mort_hilldiversity <- mort_hilldiversity %>%
 mutate(mort_cat = ifelse(site == "U01" & year == "2022", "LowMort",       
                     ifelse( year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
 
-mort_diversity$mort_cat <- factor(mort_diversity$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+mort_hilldiversity$mort_cat <- factor(mort_hilldiversity$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+mort_hilldiversity <- mort_hilldiversity %>%
+  left_join(defo_final, by = c("site", "year"))
 
 # defo diversity
-plot_div_defo <- mort_diversity %>%
-  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+plot_div_defo <- mort_hilldiversity %>%
+  filter(diversity_metric %in% c("Shannon", "Shannon_Evenness", "richness")) %>%
         ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
                   cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
-      facet_grid(diversity_metric~year, scales = "free_y", labeller = labeller(diversity_metric = new_labels)) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+      facet_grid(diversity_metric~year, scales = "free_y", labeller = labeller(diversity_metric = diversity_labs)) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
   guides(color = guide_legend(title = "Year"),
          shape = guide_legend(title = "Tree Mortality")) + theme(legend.position = "bottom")
+
+#+ geom_point(data = filter_div, color = "black", fill = "black", size = 4)  
+#+ geom_smooth(data = filter_div_sig, method = "lm", color = "#d95f02", fill = "#d95f02") + 
+#  geom_point(data = filter_div_sig, color = "#d95f02", fill = "#d95f02", size = 2.1)
 
 plot_div_defo
 
 ### change this to 3 separate plots and then after we add the ref range info later on we will combine with ggarrange
 ## just to be consistent in paper with A B C labels rather than facets 
 
-plot_richness_defo <- mort_diversity %>%
+plot_richness_defo <- mort_hilldiversity %>%
   filter(diversity_metric == "richness") %>%
         ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
@@ -517,8 +511,8 @@ panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), 
 
 plot_richness_defo
 
-plot_evenness_defo <- mort_diversity %>%
-  filter(diversity_metric == "Evenness") %>%
+plot_evenness_defo <- mort_hilldiversity %>%
+  filter(diversity_metric == "Shannon_Evenness") %>%
         ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
                   cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
@@ -529,7 +523,7 @@ panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), 
 
 plot_evenness_defo 
 
-plot_shannon_defo <- mort_diversity %>%
+plot_shannon_defo <- mort_hilldiversity %>%
   filter(diversity_metric == "Shannon") %>%
         ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
@@ -1198,64 +1192,79 @@ ggarrange(EPT_mort1, chiro_mort1,
 ```
 
 ## reference data with diversity 
+- updated to iNEXT coverage based
 
 ```{r}
-# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
-#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+invertrefs_round <- invert_refs %>%
+  mutate(count = round(count))
 
-#fixed this above, so don't think we need family name in genus anymore
-#inverts <- inverts %>%
- # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
-
-### CHANGE TO FAMILY
-
-#make sure there are no duplicates 
-inverts1_refs <- invert_refs %>%
-  dplyr::select(Family, site, year, count, SampleId) %>%
+invref_mat <- invertrefs_round %>%
+  select(Family, site, year, count, SampleId) %>%
   group_by(Family, SampleId) %>%
-  summarize(count = sum(count))
+  summarize(count = sum(count), .groups = "drop") %>%
+  #unite(site_year, site, year, sep = "_") %>%   # keep site-year unique
+  pivot_wider(names_from = Family, values_from = count, values_fill = 0)
 
-#pivot wide
-ainverts1_refs <- inverts1_refs %>%
-  pivot_wider(names_from = "Family", values_from = "count")
+invref_mat_df <- as.data.frame(invref_mat)
+rownames(invref_mat_df) <- invref_mat_df$SampleId
+invref_mat_df <- invref_mat_df %>% select(-SampleId)
 
-ainverts1_refs[is.na(ainverts1_refs)] <- 0
+##Convert each row into an abundance vector for iNEXT 
+comm_list <- apply(invref_mat_df, 1, function(x) x[x > 0])
 
-ainverts1_refs <- as.data.frame(ainverts1_refs)
-rownames(ainverts1_refs) <- ainverts1_refs[,1] #change sampleid to row names
-ainverts1_refs <- ainverts1_refs %>% dplyr::select(-1) #remove site column 
+hill_all_refs <- iNEXT::estimateD(
+  comm_list,
+  q = c(0, 1, 2),
+  datatype = "abundance",
+  base = "coverage"
+)
 
-sampleid <- as.data.frame(row.names(ainverts1_refs)) %>%
-  dplyr::rename(site = "row.names(ainverts1_refs)")
+hill_all_refs <- hill_all_refs %>%
+ # separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE) %>%
+  rename(diversity_metric = Order.q, diversity = qD)
 
-# ok now its ready to actual run the metrics with vegan
-#Pielou’s evenness is Shannon diversity divided by richness
-diversity_refs <- data.frame(sampleid, Shannon = diversity(ainverts1_refs, index="shannon"),
-                             InverseSimpson = diversity(ainverts1_refs, index="invsimpson"),
-                             richness = specnumber(ainverts1_refs)) %>%
-        mutate(Evenness = Shannon/log(richness)) %>% pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>%
-  filter(site != "0")
+hill_all_refs <- hill_all_refs %>%
+  mutate(diversity_metric = ifelse(diversity_metric == 0, "richness", 
+                                  ifelse(diversity_metric == 1, "Shannon", "InverseSimpson")))
 
-diversity_refs_summary <- diversity_refs %>%
+#calculate Hill Shannon Evenness and Simpsons Evenness
+#shannon sensitive to common species # simpson strongly weights dominant species 
+
+
+hill_wide_refs <- hill_all_refs %>%
+  select(Assemblage, diversity_metric, diversity) %>%
+  pivot_wider(names_from = diversity_metric, values_from = diversity)
+
+hill_evenness_refs <- hill_wide_refs %>%
+  mutate(
+    Shannon_Evenness = Shannon / richness,   # Shannon evenness (J')
+    InvSimp_Evenness = InverseSimpson / richness    # Simpson-based evenness
+  )
+
+hill_long_refs <- hill_evenness_refs %>%
+  pivot_longer(cols = c(richness, Shannon, InverseSimpson , Shannon_Evenness, InvSimp_Evenness),
+               names_to = "diversity_metric",
+               values_to = "diversity")
+
+diversity_refs_summary <- hill_long_refs %>%
   group_by(diversity_metric) %>%
   summarize(mean = mean(diversity), sdx2 = 2*sd(diversity), sd = sd(diversity)) %>%
   mutate(low.limit = mean - sdx2, up.limit = mean + sdx2)
 
-diversity_refs_summary <- diversity_refs_summary %>%
-  filter(diversity_metric %in% c("Shannon", "Evenness", "richness"))
+diversity_refs_summary  <- diversity_refs_summary %>%
+  filter(diversity_metric %in% c("Shannon", "Shannon_Evenness", "richness"))
+
+#diversity and defo 
+plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
 
 diversity_refs_evenness <- diversity_refs_summary %>%
-  filter(diversity_metric == "Evenness")
+  filter(diversity_metric == "Shannon_Evenness")
 
 diversity_refs_richness <- diversity_refs_summary %>%
   filter(diversity_metric == "richness")
 
 diversity_refs_shannon <- diversity_refs_summary %>%
   filter(diversity_metric == "Shannon")
-
-
-#diversity and defo 
-plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
 
 ## Try this with the individual plots
 #diversity and defo 
