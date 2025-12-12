@@ -64,6 +64,8 @@ library(performance)
 library(see)
 library(corrplot)
 library("psych")
+library(ggpmisc)
+
 ```
 
 # Part 1 General Data Prep 
@@ -144,7 +146,8 @@ waterchem_means_wide <- waterchem_summary %>%
 
 ### ok now lets get the sample closest to the kick only 
 waterchem_kicks <- waterchem_wide %>%
-  filter(date.collected %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13"))
+  mutate(date.collected = as.Date(date.collected)) %>%
+  dplyr::filter(date.collected %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13"))
 ```
 
 
@@ -170,6 +173,7 @@ flow_september <- flow_fullseason %>%
 
 # perfect, can use this date filter for the waterchem too 
 flow_sept_kicks <- flow_september %>%
+    mutate(date = as.Date(date)) %>%
   filter(date %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13")) %>%
   rename(date.collected = date)
   
@@ -215,6 +219,7 @@ DOM_means_wide <- DOM_summary %>%
 
 # DOM for kick timing only 
 DOM_kicks <- DOM_data %>%
+    mutate(date.collected = as.Date(date.collected)) %>%
   filter(date.collected %in% c("2021-09-17", "2021-09-18", "2021-09-19", "2022-09-08", "2022-09-09", "2023-09-11", "2023-09-12", "2023-09-13"))
 ```
 
@@ -378,165 +383,7 @@ inverts_family  <- inverts_family %>%
 
 ```
 
-### diversity metrics
 
-- switch to Hill based metrics with iNEXT to account for coverage 
-
-```{r}
-library(iNEXT)
-
-inverts_round <- inverts %>%
-  mutate(count = round(count))
-
-inv_mat <- inverts_round %>%
-  filter(year != "2019") %>%
-  select(Family, site, year, count) %>%
-  group_by(Family, site, year) %>%
-  summarize(count = sum(count), .groups = "drop") %>%
-  unite(site_year, site, year, sep = "_") %>%   # keep site-year unique
-  pivot_wider(names_from = Family, values_from = count, values_fill = 0)
-
-inv_mat_df <- as.data.frame(inv_mat)
-rownames(inv_mat_df) <- inv_mat_df$site_year
-inv_mat_df <- inv_mat_df %>% select(-site_year)
-
-##Convert each row into an abundance vector for iNEXT 
-comm_list <- apply(inv_mat_df, 1, function(x) x[x > 0])
-
-hill_all <- iNEXT::estimateD(
-  comm_list,
-  q = c(0, 1, 2),
-  datatype = "abundance",
-  base = "coverage"
-)
-
-hill_all <- hill_all %>%
-  separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE) %>%
-  rename(diversity_metric = Order.q, diversity = qD)
-
-hill_all <- hill_all %>%
-  mutate(diversity_metric = ifelse(diversity_metric == 0, "richness", 
-                                  ifelse(diversity_metric == 1, "Shannon", "InverseSimpson")))
-
-#calculate Hill Shannon Evenness and Simpsons Evenness
-#shannon sensitive to common species # simpson strongly weights dominant species 
-
-
-hill_wide <- hill_all %>%
-  select(Assemblage, diversity_metric, diversity) %>%
-  pivot_wider(names_from = diversity_metric, values_from = diversity)
-
-hill_evenness <- hill_wide %>%
-  mutate(
-    Shannon_Evenness = Shannon / richness,   # Shannon evenness (J')
-    InvSimp_Evenness = InverseSimpson / richness    # Simpson-based evenness
-  )
-
-hill_long <- hill_evenness %>%
-  pivot_longer(cols = c(richness, Shannon, InverseSimpson , Shannon_Evenness, InvSimp_Evenness),
-               names_to = "diversity_metric",
-               values_to = "diversity")
-
-hill_long <- hill_long %>%
-  separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE)
-
-hill_long$site <- hill_long$site %>%    
-        factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
-
-mort_hilldiversity <- mortality %>%
- full_join(hill_long, by = c("site", "year")) %>%
-  dplyr::filter(year %in% c("2021", "2022", "2023"))
-
-#2023 all metrics 
-
-diversity_labs <- c(`InverseSimpson` = "Inverse Simpson's",
-                    `richness` = "Richness",
-                    `Shannon` = "Shannon Diversity",
-                    `Shannon_Evenness` = "Evenness (Shannon-based)",
-                    `InvSimp_Evenness` = "Evenness (Simpson-based)")
-
-mort_hilldiversity$diversity_metric <- mort_hilldiversity$diversity_metric %>%
-                  factor(levels = c("richness", "Shannon", "InverseSimpson", "Shannon_Evenness", "InvSimp_Evenness"))
-
-filter_div <- mort_hilldiversity %>%
- # filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
-  filter(site %in% c("U01", "U02")) %>%
-  filter(year == "2023")
-
-filter_div_sig <- mort_hilldiversity %>%
-  filter(year == "2022") %>%
-  filter(diversity_metric %in% c("Evenness", "Shannon"))
-
-#fix the lowercase on richness
-new_labels <- c(richness = "Richness", Shannon = "Shannon", Evenness = "Evenness")
-
-mort_hilldiversity <- mort_hilldiversity %>%
-mutate(mort_cat = ifelse(site == "U01" & year == "2022", "LowMort",       
-                    ifelse( year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
-
-mort_hilldiversity$mort_cat <- factor(mort_hilldiversity$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
-
-mort_hilldiversity <- mort_hilldiversity %>%
-  left_join(defo_final, by = c("site", "year"))
-
-# defo diversity
-plot_div_defo <- mort_hilldiversity %>%
-  filter(diversity_metric %in% c("Shannon", "Shannon_Evenness", "richness")) %>%
-        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
-                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
-      facet_grid(diversity_metric~year, scales = "free_y", labeller = labeller(diversity_metric = diversity_labs)) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
-  guides(color = guide_legend(title = "Year"),
-         shape = guide_legend(title = "Tree Mortality")) + theme(legend.position = "bottom")
-
-#+ geom_point(data = filter_div, color = "black", fill = "black", size = 4)  
-#+ geom_smooth(data = filter_div_sig, method = "lm", color = "#d95f02", fill = "#d95f02") + 
-#  geom_point(data = filter_div_sig, color = "#d95f02", fill = "#d95f02", size = 2.1)
-
-plot_div_defo
-
-### change this to 3 separate plots and then after we add the ref range info later on we will combine with ggarrange
-## just to be consistent in paper with A B C labels rather than facets 
-
-plot_richness_defo <- mort_hilldiversity %>%
-  filter(diversity_metric == "richness") %>%
-        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
-                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
-      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Richness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
- guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
-         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
-
-plot_richness_defo
-
-plot_evenness_defo <- mort_hilldiversity %>%
-  filter(diversity_metric == "Shannon_Evenness") %>%
-        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
-                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
-      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Evenness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
-  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
-         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
-
-plot_evenness_defo 
-
-plot_shannon_defo <- mort_hilldiversity %>%
-  filter(diversity_metric == "Shannon") %>%
-        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
-                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
-  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Shannon Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
-  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
-         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
-
-
-plot_shannon_defo 
-
-```
 
 ## PCA with stream enviro variables 
 
@@ -601,12 +448,12 @@ env_all_subset <- env_all %>%
 env_all_scale <- scale(env_all_subset)
   
 ## set up dataframe for communities
-inverts_Test <- inverts1 %>%
+inverts_Test <- inverts_family %>%
   mutate(sample = paste(year, site, sep = "_")) %>%
+    ungroup() %>%
+  dplyr::select(Family, sample, fcount) %>%
  # dplyr::select(-year) %>%
-  pivot_wider(names_from = "Family", values_from = "count") %>%
-  ungroup() %>%
-  dplyr::select(-year, -site)
+  pivot_wider(names_from = "Family", values_from = "fcount")
 
 inverts_Test <- inverts_Test %>%
   arrange(sample)
@@ -639,7 +486,7 @@ invert_stream$year <- as.factor(invert_stream$year)
 all_hel <- decostand(inverts_Test, "hellinger")
 
 ### LAND AND STREAM TOGETHER SCALED
-vif.cca(rda(all_hel, env_all_scale)) 
+#vif.cca(rda(all_hel, env_all_scale)) 
 ## all under 10 - elev is highest at 8
 
 pca_all <- rda(all_hel)
@@ -702,6 +549,7 @@ sig.env_all$pretty_label <- pretty_labels[sig.env_all$env.variables]
 
 final_pca_all_plot <- plot_pca_all + geom_segment(data = sig.env_all, aes(x = 0, y = 0, xend = PC1, yend = PC2), arrow = arrow(length = unit(0.25, "cm")), colour = "black", lwd = 0.3) + geom_text_repel(data = sig.env_all, aes(x = PC1, y = PC2), colour = "black", fontface = "bold", label = sig.env_all$pretty_label) 
 
+final_pca_all_plot
 ```
 
 ### Invert Community Metrics 
@@ -810,63 +658,71 @@ mort_inverts23 <- mort_inverts %>%
 
 mort_inverts22 <- mort_inverts %>%
   dplyr::filter(year == "2022")
+
+inverts23_nomort <- mort_inverts23 %>%
+  dplyr::filter(mort_cat == "NoMort")
+
+inverts_nomort <- mort_inverts %>%
+    dplyr::filter(mort_cat == "NoMort")
 ```
 
 ## plots
 
 ```{r}
+#### correlations
 
-#EPT
-# EPT defo 
 plot_EPTdefo <- mort_inverts %>%
         ggscatter(x = "cdefo5y", y = "perc_EPT", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, 
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 100), cor.coef.size = 5) + 
-                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat"))+ labs(x = "Cumulative Defoliation", y = "%EPT") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                  cor.coef = FALSE, cor.method = "pearson") + #cor.coef.coord = c(3, 100), cor.coef.size = 5) + 
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01, label.x = 3, label.y = 100) +
+                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat"))+ labs(x = "Cumulative Defoliation", y = "% EPT Group") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
   guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
          shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
 
-
-
-mort_inverts %>%
+#chiro
+plot_chirodefo <- mort_inverts %>%
         ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, 
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
+                  cor.coef = FALSE, cor.method = "pearson") + #, cor.coef.coord = c(3, 40), cor.coef.size = 5) +
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01, label.x =2.8, label.y = 43) +
                   facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 5% Mortality", "Mort" = "> 25% Mortality", "LowMort" = "5 - 24.9% Mortality")) + 
-  guides(color = guide_legend(title = "Year"), nrow = 3,
-         shape = guide_legend(title = "Tree Mortality"), nrow =3) + theme(legend.position = "bottom")
+ guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
 
+### linear models 
+#EPT
+# EPT defo 
+plot_EPTdefo1 <- inverts_nomort %>%
+          ggplot(aes(x = cdefo5y, y = perc_EPT, color = year)) +
+  geom_point(size = 1) +
+stat_poly_eq(use_label(c("R2", "p")), color = "black", size = 5) + 
+   stat_poly_line(data = inverts23_nomort) +
+  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + scale_fill_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "%EPT") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") +
+  geom_point(aes(shape = mort_cat), size = 4) +
+scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
 
 plot_EPTdefo 
 
 #percent chironomids with defo
-#plot 2019 too 
 
-defo_inverts <- mortality %>%
- full_join(inverts_EPT2, by = c("site", "year")) %>%
-  dplyr::filter(year %in% c("2019", "2021", "2022", "2023"))
-
-plot_chirodefo19 <- defo_inverts %>%
-        ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4,
-                  #add = "reg.line", conf.int = TRUE, 
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
-                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2", guide = "none") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4) + labs(x = "Cumulative Defoliation", y = "% Chironomids") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
-
-
-
-plot_chirodefo <- mort_inverts %>%
-        ggscatter(x = "cdefo5y", y = "perc_chironomid", color = "year", size = 4, shape = "mort_cat",
-                  #add = "reg.line", conf.int = TRUE, 
-                  cor.coef = TRUE, cor.method = "pearson", cor.coef.coord = c(3, 40), cor.coef.size = 5) + 
-                  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + geom_smooth(data = mort_inverts23, method = "lm", color = "#7570b3", fill = "#7570b3") + geom_point(data = mort_inverts23, color = "#7570b3", fill = "#7570b3", size = 4, aes(shape = "mort_cat")) + labs(x = "Cumulative Defoliation", y = "%Chironomidae") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
-panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "Mort" = "> 30% Mortality", "LowMort" = "10 - 29.9% Mortality")) + 
-guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+plot_chirodefo1 <- inverts_nomort %>%
+            ggplot(aes(x = cdefo5y, y = perc_chironomid, color = year)) +
+  geom_point(size = 1) +
+stat_poly_eq(use_label(c("R2", "p")), color = "black", size = 5) + 
+   stat_poly_line(data = inverts23_nomort) +
+  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + scale_fill_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "%Chironomidae") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") +
+  geom_point(aes(shape = mort_cat), size = 4) +
+scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
          shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
-
-
+  
 #percent EPT with mortality
 EPT_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_EPT, fill=mort_cat)) +
     geom_boxplot() +
@@ -890,7 +746,79 @@ chiro_mort <- ggplot(mort_inverts23, aes(x=mort_cat, y=perc_chironomid, fill=mor
 chiro_mort 
 
 ```
-  
+#### check lm assumptions 
+
+```{r, eval = FALSE}
+### EPT 
+# check assumptions of lm21 
+div21 <- mort_inverts %>%
+ filter(year == "2021")
+
+mod21 <- lm(data = div21, perc_EPT ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod21)
+
+# check assumptions of lm22 
+div22 <- mort_inverts %>%
+ filter(year == "2022")
+
+mod22 <- lm(data = div22, perc_EPT ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod22)
+
+# check assumptions of lm23 
+div23 <- mort_inverts %>%
+ filter(year == "2023")
+
+mod23 <- lm(data = div23, perc_EPT ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod23)
+
+##Chiro
+### EPT 
+# check assumptions of lm21 
+div21 <- mort_inverts %>%
+ filter(year == "2021")
+
+mod21 <- lm(data = div21, perc_chironomid ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod21)
+
+# check assumptions of lm22 
+div22 <- mort_inverts %>%
+ filter(year == "2022")
+
+mod22 <- lm(data = div22, perc_chironomid ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod22)
+
+# check assumptions of lm23 
+div23 <- mort_inverts %>%
+ filter(year == "2023")
+
+mod23 <- lm(data = div23, perc_chironomid ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod23)
+
+mod23 <- lm(data = inverts23_nomort, perc_chironomid ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod23)
+
+mod23 <- lm(data = inverts23_nomort, perc_EPT ~ cdefo5y)
+
+par(mfrow = c(2, 2))
+plot(mod23)
+
+
+```
+
 
 # Section B: Comparison to undefoliated CABIN Watersheds
 - CABIN data was downloaded from the online database  https://www.canada.ca/en/environment-climate-change/services/canadian-aquatic-biomonitoring-network/database.html
@@ -1107,7 +1035,7 @@ ci
 
 # Mort EPT with 2 sd
 EPT_mort1 <- EPT_mort + geom_hline(yintercept=84.7, linetype="dashed", color = "red", size=2) + 
-  annotate('rect', xmin=0, xmax=3, ymin=64.3, ymax=105.1, alpha=.4, fill='grey') # specify size based on 2 SD (Celine's reccomendation based on a paper )
+  annotate('rect', xmin=0, xmax=3, ymin=64.3, ymax=105.1, alpha=.4, fill='grey')  # specify size based on 2 SD (Celine's reccomendation based on a paper )
 
 # with 95% CI
 #p1 + geom_hline(yintercept=89.4, linetype="dashed", color = "red", size=2) + 
@@ -1144,11 +1072,11 @@ ci
 
 # with 2 sd (mort)
 chiro_mort1 <- chiro_mort + geom_hline(yintercept=7.4, linetype="dashed", color = "red", size=2) + 
-  annotate('rect', xmin=0, xmax=3, ymin=-6, ymax= 20.8, alpha=.4, fill='grey') # specify size based on 2 SD (Celine's reccomendation based on a paper )
+  annotate('rect', xmin=0, xmax=3, ymin=-6, ymax= 20.8, alpha=.4, fill='grey', color='white')  # specify size based on 2 SD (Celine's reccomendation based on a paper )
 
 #Defo chiro
 plot_chirodefo1 <- plot_chirodefo + geom_hline(yintercept=7.4, linetype="dashed", color = "red", size=2) + 
-  annotate('rect', xmin=2.5, xmax=11, ymin=-6, ymax= 20.8, alpha=.4, fill='grey') 
+  annotate('rect', xmin=2.5, xmax=11, ymin=-6, ymax= 20.8, alpha=.4, fill='grey')  
 
 plot_chirodefo1 
 
@@ -1191,102 +1119,7 @@ ggarrange(EPT_mort1, chiro_mort1,
 
 ```
 
-## reference data with diversity 
-- updated to iNEXT coverage based
 
-```{r}
-invertrefs_round <- invert_refs %>%
-  mutate(count = round(count))
-
-invref_mat <- invertrefs_round %>%
-  select(Family, site, year, count, SampleId) %>%
-  group_by(Family, SampleId) %>%
-  summarize(count = sum(count), .groups = "drop") %>%
-  #unite(site_year, site, year, sep = "_") %>%   # keep site-year unique
-  pivot_wider(names_from = Family, values_from = count, values_fill = 0)
-
-invref_mat_df <- as.data.frame(invref_mat)
-rownames(invref_mat_df) <- invref_mat_df$SampleId
-invref_mat_df <- invref_mat_df %>% select(-SampleId)
-
-##Convert each row into an abundance vector for iNEXT 
-comm_list <- apply(invref_mat_df, 1, function(x) x[x > 0])
-
-hill_all_refs <- iNEXT::estimateD(
-  comm_list,
-  q = c(0, 1, 2),
-  datatype = "abundance",
-  base = "coverage"
-)
-
-hill_all_refs <- hill_all_refs %>%
- # separate(Assemblage, into = c("site", "year"), sep = "_", remove = FALSE) %>%
-  rename(diversity_metric = Order.q, diversity = qD)
-
-hill_all_refs <- hill_all_refs %>%
-  mutate(diversity_metric = ifelse(diversity_metric == 0, "richness", 
-                                  ifelse(diversity_metric == 1, "Shannon", "InverseSimpson")))
-
-#calculate Hill Shannon Evenness and Simpsons Evenness
-#shannon sensitive to common species # simpson strongly weights dominant species 
-
-
-hill_wide_refs <- hill_all_refs %>%
-  select(Assemblage, diversity_metric, diversity) %>%
-  pivot_wider(names_from = diversity_metric, values_from = diversity)
-
-hill_evenness_refs <- hill_wide_refs %>%
-  mutate(
-    Shannon_Evenness = Shannon / richness,   # Shannon evenness (J')
-    InvSimp_Evenness = InverseSimpson / richness    # Simpson-based evenness
-  )
-
-hill_long_refs <- hill_evenness_refs %>%
-  pivot_longer(cols = c(richness, Shannon, InverseSimpson , Shannon_Evenness, InvSimp_Evenness),
-               names_to = "diversity_metric",
-               values_to = "diversity")
-
-diversity_refs_summary <- hill_long_refs %>%
-  group_by(diversity_metric) %>%
-  summarize(mean = mean(diversity), sdx2 = 2*sd(diversity), sd = sd(diversity)) %>%
-  mutate(low.limit = mean - sdx2, up.limit = mean + sdx2)
-
-diversity_refs_summary  <- diversity_refs_summary %>%
-  filter(diversity_metric %in% c("Shannon", "Shannon_Evenness", "richness"))
-
-#diversity and defo 
-plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
-
-diversity_refs_evenness <- diversity_refs_summary %>%
-  filter(diversity_metric == "Shannon_Evenness")
-
-diversity_refs_richness <- diversity_refs_summary %>%
-  filter(diversity_metric == "richness")
-
-diversity_refs_shannon <- diversity_refs_summary %>%
-  filter(diversity_metric == "Shannon")
-
-## Try this with the individual plots
-#diversity and defo 
-plot_even_ref <- plot_evenness_defo + geom_hline(data = diversity_refs_evenness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_evenness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
-
-plot_rich_ref <- plot_richness_defo + geom_hline(data = diversity_refs_richness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_richness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
-
-plot_shan_ref <- plot_shannon_defo + geom_hline(data = diversity_refs_shannon, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_shannon, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
-
-## gg arrange for ABC labels
-final_diversity_plot <- ggarrange(plot_even_ref, plot_rich_ref, plot_shan_ref,
-        labels = c("A", "B", "C"),
-         font.label=list(size = 16, color = "black", face = "bold"),
-     common.legend = TRUE,
-         legend = "bottom",
-          #legend.grob = get_legend(p3),
-          ncol = 1, nrow = 3,
-        align = "hv") 
-
-final_diversity_plot
-
-```
 
 # PCA: Defoliated vs nondefoliated 
 
@@ -1431,6 +1264,94 @@ anosim_result <- anosim(dist_matrix, grouping = samples_all$Site_Type, permutati
 #plot(anosim_result)
 ```
 
+### manylm instead of PERMANOVA 
+
+```{r}
+
+# try mvabund 
+# this is not affected by dispersion, also gives us some individual taxa responses
+#couldnt use manyGLM because it only takes raw counts - need manyLM that allows for the transformed data 
+
+library(mvabund)
+
+# samples in rows, species in cols 
+
+comm_mv <- mvabund(all_inverts_hel)
+
+summary(comm_mv)
+
+## set up grouping factor 
+
+#add metadata for labels
+
+sampleID <- as.data.frame(row.names(all_inverts_hel))
+
+sampleID <- sampleID %>%
+  rename(sample = 'row.names(all_inverts_hel)')
+
+sampleID <- sampleID %>%
+  left_join(all_metadata, by = "sample")
+
+group <- factor(sampleID$Site_Type, levels = c("Defoliated", "Undefoliated"))
+
+mod <- manylm(comm_mv ~ group)
+
+set.seed(123)  # reproducibility
+
+anova_res <- anova(mod, p.uni = "adjusted", nBoot = 999)
+print(anova_res)
+
+library(broom) 
+
+coefs <- coef(mod)  
+
+effect_sizes <- data.frame(
+  taxon = colnames(coefs),
+  coef = coef(mod)["groupUndefoliated",]
+)
+
+anova_uni <- anova_res$uni.p
+effect_sizes$p <- anova_uni["group",]
+
+effect_sizes$signif <- cut(effect_sizes$p,
+   breaks = c(-Inf, 0.05, Inf),
+   labels = c("p < 0.05", "ns")
+)
+
+effect_sizes_sig <- effect_sizes %>%
+  filter(signif != "ns") %>%
+  arrange(desc(coef))
+
+effect_sizes_sig$taxon <- factor(effect_sizes_sig$taxon, levels = rev(effect_sizes_sig$taxon))
+
+effect_sizes_sig <- effect_sizes_sig %>%
+  mutate(Direction = ifelse(coef < 0, "Defo", "NonDefo"))
+
+effect_sizes_sig <- effect_sizes_sig %>%
+  filter(taxon != "unknown")
+
+lmmany_plot <- ggplot(effect_sizes_sig, aes(x = coef, y = taxon, fill = Direction)) +
+  geom_col(width = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_x_continuous(
+    name = "Effect size (difference in Hellinger-transformed abundance)") +
+   # limits = c(min_log_or, max_log_or),
+  #  breaks = seq(min_log_or, max_log_or, 1)
+#  ) +
+  scale_y_discrete(name = "Significant Taxa (p <0.05)") +
+  scale_fill_manual(values = c("Defo" = "#440154", "NonDefo" = "#b5de2b"), 
+                        labels = c("Defo" = "Defoliated", "NonDefo" = "Non-defoliated")) +
+  labs(
+  #  title = "Significant Taxa by Fisher's Exact Test",
+  # subtitle = paste("FDR-adjusted p-value <", alpha),
+    fill = "Site Type"
+  ) +
+  theme_minimal(base_size = 14) +  theme(legend.position = "bottom")
+
+lmmany_plot
+
+```
+
 ## Gamma Diversity and Differntial Abundance (Fisher's Exact)
 
 ```{r}
@@ -1563,7 +1484,7 @@ gammaplot
 #group factor in separate object 
 pa_data <- all_inverts > 0
   
-group <- factor(c(rep("Defo", 36), rep("Non", 49)))
+group <- factor(c(rep("Defo", 36), rep("Non", 47)))
 
 fisher_pvals <- numeric(ncol(pa_data))
 names(fisher_pvals) <- colnames(pa_data)
@@ -1716,3 +1637,504 @@ final_plot <- ggarrange(
 )
 ```
 
+#### Supplemental Environmental PCA (site data only, no community data)
+
+## Reference watershed habitat data 
+
+```{r}
+RefHabitat <- read.csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/RefData_Filtered.csv", col.names = c("site", "date.collected", "year", "depth_mean.cm", "depth.bankful", "depth_max.cm", "flow_mean.ms", "flow_max.ms", "bankfull_width.m", "wetted_width.m", "alk.mgL", "DO.mgL", "pH", "water_temp.C", "TP.mgL", "notes", "suspect"))
+
+RefHabitat <- RefHabitat %>%
+  select(-depth.bankful, -alk.mgL, -TP.mgL) # remove depth.bankful and alkalinity - too many NAs
+
+# need consistent units with our SBWD
+# change cm to m
+# change flow m/s to discharge (m3/s) by multiplying by depth and width 
+
+RefHabitat <- RefHabitat %>%
+  mutate(depth_mean.m = depth_mean.cm/100) %>%
+  mutate(depth_max.m = depth_max.cm/100) %>%
+  mutate(flow_mean.m3s = flow_mean.ms*depth_mean.m*wetted_width.m)
+
+RefHabitat <- RefHabitat %>%
+  select(-depth_mean.cm, -depth_max.cm, -flow_mean.ms)
+
+#remove 9999 from DO 
+RefHabitat[27, "DO.mgL"] <- NA
+
+### PGA001 2016 and BDR 2016 have no habitat data, will be excluded
+RefHabitat <- RefHabitat[-c(34, 50), ]
+#### DO has 7 NA entries, all other variables less than 5. leave all in for now 
+
+
+### Also join watershed characteristics 
+Ref_watershed_charac <- read.csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/ReferenceData/Reference_watershed_characteristics.csv")
+
+RefHabitat <- RefHabitat %>%
+  left_join(Ref_watershed_charac, by = "site")
+
+### now there are several suspect entries in this dataset
+### run any analysis with and without them 
+### there are several depth values (mean and max) which are below 1.
+# confirmed with project lead that these were indeed reported as metres, but also rounded. they are going to provide us with updated data soon
+### also several bankful and wetted width values that are questionable (e.g. 25m bankful with wetted of 5 in one year and 13m bankful with 5 in next)
+
+### run analysis with and without suspect values 
+RefHabitat_confident <- RefHabitat %>%
+  filter(suspect == "no")
+
+```
+
+```{r}
+# confident reference habitat data we have 36 samples. full dataset is 51
+
+
+## also pull in wetted width data for SBWD
+###NOTE the temp at time of kick from the stage data was added to this spreadsheet for 2022 because we had no YSI data
+## ysi values match up well to stage in other years so fine to use 
+SBWD_width_depth <- read.csv("//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/SBWD_wettedwidth_depth.csv")
+
+SBWD_width_depth <- SBWD_width_depth %>%
+  rename(date.collected = date)
+
+SBWD_width_depth$date.collected <- as.Date(SBWD_width_depth$date.collected)
+## join to stream hab kicks
+stream_habitat_kicks$date.collected <- as.Date(stream_habitat_kicks$date.collected )
+
+stream_habitat_kicks <- stream_habitat_kicks %>%
+  left_join(SBWD_width_depth, by = c("site", "date.collected"))
+
+SBWD_habitat_comparison <- stream_habitat_kicks %>%
+  dplyr::select(site, year, date.collected, flow.m3s, wetted_width.m, depth_mean.m, pH, ysi.ph, ysi.do.mgL, ysi.water.temp.c, temp.C)
+
+#join the two temp cols together
+SBWD_habitat_comparison <- SBWD_habitat_comparison %>%
+  mutate(water_temp.C = coalesce(ysi.water.temp.c, temp.C)) %>%
+    mutate(pH = coalesce(ysi.ph, pH)) %>%
+  dplyr::select(-ysi.ph, -ysi.water.temp.c, -temp.C)
+
+#join watershed charac too 
+SBWD_habitat_comparison <- SBWD_habitat_comparison %>%
+  left_join(watershed_characteristics %>% dplyr::select(1,5,8,21), by = "site") 
+
+```
+
+### ok join things together 
+
+```{r}
+RefHabitat_confident <- RefHabitat_confident %>%
+  dplyr::select(site, year, date.collected, flow_mean.m3s, wetted_width.m, depth_mean.m, pH, water_temp.C, Catchment_Area_km2, Elevation_Mean_metres, SpFir_Perc) %>%
+  rename(spfir = SpFir_Perc) %>%
+  rename(flow.m3s = flow_mean.m3s) %>%
+    mutate(SiteType = "NonDefo") %>%
+  mutate(date.collected = as.Date(date.collected))
+
+RefHabitat <- RefHabitat %>%
+  dplyr::select(site, year, date.collected, flow_mean.m3s, wetted_width.m, depth_mean.m, pH, water_temp.C, Catchment_Area_km2, Elevation_Mean_metres, SpFir_Perc) %>%
+    rename(spfir = SpFir_Perc) %>%
+  rename(flow.m3s = flow_mean.m3s) %>%
+    mutate(SiteType = "NonDefo") %>%
+  mutate(date.collected = as.Date(date.collected))
+
+#keep 2022, skip DO
+SBWD_habitat_comparison <- SBWD_habitat_comparison %>%
+  filter(year %in% c("2021", "2022", "2023")) %>%
+  dplyr::select(-ysi.do.mgL) %>%
+  mutate(SiteType = "Defo")
+
+
+Habitat <- rbind(RefHabitat, SBWD_habitat_comparison)
+
+Habitat_full <- rbind(RefHabitat, SBWD_habitat_comparison)
+#write.csv(Habitat_full, "//132.156.200.8/WatershedEcol_b/wet_personal_workspace/MaddieMcCaig/SBWD/CABIN_Analyses/StreamHabitat_full.csv", row.names = FALSE)
+  
+```
+
+### Run PCA 
+
+```{r}
+Habitat <- Habitat %>%
+  mutate(sample = ifelse(SiteType == "Defo", paste0(year, "_", site), paste0(site, "_", year)))
+
+#select only numerics
+all_metadata1 <- Habitat %>%
+  dplyr::select(4:11)
+
+row.names(all_metadata1) <- Habitat$sample
+
+all_metadata_clean <- na.omit(all_metadata1)
+
+pca_env <- prcomp(all_metadata_clean, scale = TRUE)
+
+scores <- as.data.frame(pca_env$x)
+
+scores$sample <- row.names(scores)
+
+scores <- scores %>%
+  left_join(all_metadata, by = "sample")
+
+loadings <- as.data.frame(pca_env$rotation)
+
+scores$Site_Type <- as.factor(scores$Site_Type)
+
+# Percent variance explained on axes
+
+# proportion of variance for each PC
+var_explained <- (pca_env$sdev^2) / sum(pca_env$sdev^2)
+
+xlab <- round(var_explained[1] * 100, 1)
+ylab <- round(var_explained[2] * 100, 1)
+
+x_lab <- paste0("PCA1 ", xlab, " %")
+y_lab <- paste0("PCA2 ", ylab, " %")
+
+# make pretty labels
+pretty_labels <- c(
+  "flow.m3s" = "Stream Flow", 
+  "wetted_width.m" = "Wetted Width",
+  "depth_mean.m" = "Stream Depth", 
+  "pH" = "pH", 
+  "water_temp.C" = "Stream Temperature", 
+  "Catchment_Area_km2" = "Catchment Area", 
+  "Elevation_Mean_metres" = "Elevation", 
+  "spfir" = "% Spruce-Fir")
+
+loadings$env.variables <- row.names(loadings)
+# Apply the mapping
+loadings$pretty_label <- pretty_labels[loadings$env.variables]
+
+# need to adjust labels individually 
+loadings1 <- loadings %>%
+  filter(env.variables %in% c("wetted_width.m", "depth_mean.m", "Elevation_Mean_metres"))
+
+loading_temp <- loadings %>%
+  filter(env.variables == "water_temp.C")
+
+loading_catch <- loadings %>%
+  filter(env.variables == "Catchment_Area_km2")
+
+loading_pH <- loadings %>%
+  filter(env.variables == "pH")
+
+loading_spfir <- loadings %>%
+  filter(env.variables == "spfir")
+
+loading_flow <- loadings %>%
+  filter(env.variables == "flow.m3s")
+
+ggplot() +
+  geom_point(data = scores, aes(PC1, PC2,color = Site_Type, fill = Site_Type), size = 4) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, xend = PC1*2, yend = PC2*2),
+               arrow = arrow(length = unit(0.25, "cm"))) +
+  theme_minimal(base_size=16) + labs(x = x_lab, y = y_lab) + scale_color_manual(values = c("Defoliated" = "#440154", "Undefoliated" = "#b5de2b")) +
+  stat_ellipse(data = scores, aes(x = PC1, y = PC2, linetype = Site_Type, color = Site_Type), type = "norm", level = 0.95) + geom_text_repel(data = loadings1, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label), size =4) + geom_text(data = loading_temp, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = 0.1), size =4) + geom_text(data = loading_catch, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.7), size =4) + geom_text(data = loading_pH, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = -0.1), size =4) + geom_text(data = loading_spfir, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = 0.6), size =4) + geom_text(data = loading_flow, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.6), size =4)
+
+```
+
+### diversity metrics
+
+- switch to Shannon exponential 
+
+#### first check coverage 
+- wide range in sample sizes (95 - 11000) so check coverage 
+
+- our samples are mostly at 100% coverage - one at 92%, few 95-100%. 
+- if we decided to apply coverage dataset, the default paramters would put it at 95%, with most samples rarefied. 
+- it is only reccomended to extrapolate up to double the sample size, so would only get to about 200 in size and lose a TON of data
+- given the high coverage, I think analyzing raw richness is fine 
+
+
+```{r}
+library(iNEXT)
+
+inverts_all_round <- round(all_inverts)
+
+inverts_all_matrix <- as.matrix(inverts_all_round)
+
+##Convert each row into an abundance vector for iNEXT 
+comm_list <- apply(inverts_all_round, 1, function(x) x[x > 0])
+
+#hill_all <- iNEXT::estimateD(
+ # comm_list,
+#  q = c(0, 1, 2),
+#  datatype = "abundance",
+#  base = "coverage")
+
+coverage_results <- DataInfo(comm_list, datatype = "abundance")
+coverage_results
+
+```
+
+### diversity metrics
+
+```{r}
+
+# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
+#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+
+#fixed this above, so don't think we need family name in genus anymore
+#inverts <- inverts %>%
+ # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
+
+### CHANGE TO FAMILY 
+
+#make sure there are no duplicates 
+inverts1 <- inverts %>%
+  dplyr::select(4,6,7,10) %>%
+  group_by(Family, site, year) %>%
+  summarize(count = sum(count))
+
+a2021 <- filter(inverts1, year == "2021")
+a2022 <- filter(inverts1, year == "2022")
+a2023 <- filter(inverts1, year == "2023")
+
+#2021
+a2021 <- a2021 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2021[is.na(a2021)] <- 0
+
+a2021 <- as.data.frame(a2021)
+rownames(a2021) <- a2021[,1] #change site to row names
+a2021 <- a2021 %>% dplyr::select(-1) #remove site column 
+
+#2022
+a2022 <- a2022 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2022[is.na(a2022)] <- 0
+
+a2022 <- as.data.frame(a2022)
+rownames(a2022) <- a2022[,1] #change site to row names
+a2022 <- a2022 %>% dplyr::select(-1) #remove site column 
+
+#2023
+a2023 <- a2023 %>%
+  dplyr::select(-year) %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+a2023[is.na(a2023)] <- 0
+
+a2023 <- as.data.frame(a2023)
+rownames(a2023) <- a2023[,1] #change site to row names
+a2023 <- a2023 %>% dplyr::select(-1) #remove site column 
+
+sites <- as.data.frame(row.names(a2023)) %>%
+  dplyr::rename(site = "row.names(a2023)")
+
+# ok now its ready to actual run the metrics with vegan
+#Pileaus evenness is shannon div/richness
+
+diversity_2021 <- data.frame(sites, Shannon = exp(diversity(a2021, index="shannon")),
+                             InverseSimpson = diversity(a2021, index="invsimpson"),
+                             richness = specnumber(a2021),
+                             Shannon_classic = diversity(a2021, index="shannon")) %>%
+        mutate(Evenness = Shannon_classic/log(richness)) %>% 
+  select(-Shannon_classic) %>%
+  pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2021")
+
+diversity_2022 <- data.frame(sites, Shannon = exp(diversity(a2022, index="shannon")),
+                             InverseSimpson = diversity(a2022, index="invsimpson"),
+                             richness = specnumber(a2022), 
+                             Shannon_classic = diversity(a2022, index="shannon")) %>%
+        mutate(Evenness = Shannon_classic/log(richness)) %>% 
+  select(-Shannon_classic) %>%
+pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>% mutate(year = "2022")
+
+diversity_2023 <- data.frame(sites, Shannon = exp(diversity(a2023, index="shannon")),
+                             InverseSimpson = diversity(a2023, index="invsimpson"),
+                             richness = specnumber(a2023), 
+                             Shannon_classic = diversity(a2023, index="shannon")) %>%
+        mutate(Evenness = Shannon_classic/log(richness)) %>% 
+  select(-Shannon_classic) %>%
+  pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity")%>% mutate(year = "2023")
+
+#combine it all
+diversity_inverts <- rbind(diversity_2021, diversity_2022, diversity_2023)
+
+diversity_inverts$site <- diversity_inverts$site %>%    
+        factor(levels = c("U01", "U02", "U03", "C04", "C05", "C06", "C07", "L08", "L09", "L10", "L11", "L12"))
+
+mort_diversity <- mortality %>%
+ full_join(diversity_inverts, by = c("site", "year")) %>%
+  dplyr::filter(year %in% c("2021", "2022", "2023"))
+
+#2023 all metrics 
+
+diversity_labs <- c(`InverseSimpson` = "Inverse Simpson's",
+                    `richness` = "Genus Richness",
+                    `Shannon` = "Shannon Diversity",
+                    `Evenness` = "Evenness")
+
+mort_diversity$diversity_metric <- mort_diversity$diversity_metric %>%
+                  factor(levels = c("richness", "Shannon", "InverseSimpson", "Evenness"))
+
+filter_div <- mort_diversity %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+  filter(site %in% c("U01", "U02")) %>%
+  filter(year == "2023")
+
+filter_div_sig <- mort_diversity %>%
+  filter(year == "2022") %>%
+  filter(diversity_metric %in% c("Evenness", "Shannon"))
+
+#fix the lowercase on richness
+new_labels <- c(richness = "Richness", Shannon = "Shannon", Evenness = "Evenness")
+
+mort_diversity <- mort_diversity %>%
+mutate(mort_cat = ifelse(site == "U01" & year == "2022", "LowMort",       
+                    ifelse( year == "2023" & site %in% c("U01", "U02"), "Mort", "NoMort")))
+
+mort_diversity$mort_cat <- factor(mort_diversity$mort_cat, levels = c("NoMort", "LowMort", "Mort"))
+
+# defo diversity
+plot_div_defo <- mort_diversity %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness")) %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = TRUE, cor.method = "pearson", cor.coef.size = 5) + 
+      facet_grid(diversity_metric~year, scales = "free_y", labeller = labeller(diversity_metric = new_labels)) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year"),
+         shape = guide_legend(title = "Tree Mortality")) + theme(legend.position = "bottom")
+
+#+ geom_point(data = filter_div, color = "black", fill = "black", size = 4)  
+#+ geom_smooth(data = filter_div_sig, method = "lm", color = "#d95f02", fill = "#d95f02") + 
+#  geom_point(data = filter_div_sig, color = "#d95f02", fill = "#d95f02", size = 2.1)
+
+plot_div_defo
+
+#ggplot(data = filter_div, aes(x = cdefo5y, y = diversity)) + geom_point(aes(color = mort_cat), fill = "black", size = 4) + scale_color_manual(color = "black")
+
+### change this to 3 separate plots and then after we add the ref range info later on we will combine with ggarrange
+## just to be consistent in paper with A B C labels rather than facets 
+
+plot_richness_defo <- mort_diversity %>%
+  filter(diversity_metric == "richness") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100), cor.coef.size = 5
+                  cor.coef = FALSE, cor.method = "pearson") + 
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01) +
+      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Richness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+ guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+plot_richness_defo
+
+plot_evenness_defo <- mort_diversity %>%
+  filter(diversity_metric == "Evenness") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = FALSE, cor.method = "pearson", cor.coef.size = 5) + 
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01) +
+      facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Evenness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+plot_evenness_defo 
+
+plot_shannon_defo <- mort_diversity %>%
+  filter(diversity_metric == "Shannon") %>%
+        ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
+                  #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
+                  cor.coef = FALSE, cor.method = "pearson", cor.coef.size = 5) + 
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01) +
+  facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Shannon Diversity") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
+  guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
+         shape = guide_legend(title = "Tree Mortality", nrow = 3, byrow = TRUE)) + theme(legend.position = "bottom")
+
+
+plot_shannon_defo 
+
+
+```
+
+## reference data with diversity 
+
+```{r}
+# need data in a matrix with sites as rows and species as columns. one per year. already created data frames per year above
+#also need the family name incorporated into the genus name as sometimes it is an unknown genus
+
+#fixed this above, so don't think we need family name in genus anymore
+#inverts <- inverts %>%
+ # mutate(Family_Genus = paste(inverts$Family,inverts$Genus,sep="_"))
+
+### CHANGE TO FAMILY
+
+#make sure there are no duplicates 
+inverts1_refs <- invert_refs %>%
+  dplyr::select(Family, site, year, count, SampleId) %>%
+  group_by(Family, SampleId) %>%
+  summarize(count = sum(count))
+
+#pivot wide
+ainverts1_refs <- inverts1_refs %>%
+  pivot_wider(names_from = "Family", values_from = "count")
+
+ainverts1_refs[is.na(ainverts1_refs)] <- 0
+
+ainverts1_refs <- as.data.frame(ainverts1_refs)
+rownames(ainverts1_refs) <- ainverts1_refs[,1] #change sampleid to row names
+ainverts1_refs <- ainverts1_refs %>% dplyr::select(-1) #remove site column 
+
+sampleid <- as.data.frame(row.names(ainverts1_refs)) %>%
+  dplyr::rename(site = "row.names(ainverts1_refs)")
+
+# ok now its ready to actual run the metrics with vegan
+#Pielou’s evenness is Shannon diversity (NOT exponential) divided by richness
+diversity_refs <- data.frame(sampleid, Shannon = exp(diversity(ainverts1_refs, index="shannon")),
+                             InverseSimpson = diversity(ainverts1_refs, index="invsimpson"),
+                             richness = specnumber(ainverts1_refs),
+                             Shannon_classic = diversity(ainverts1_refs, index="shannon")) %>%
+        mutate(Evenness = Shannon_classic/log(richness)) %>% 
+  select(-Shannon_classic) %>%
+  pivot_longer(cols=c("Shannon", "InverseSimpson", "richness", "Evenness"), names_to = "diversity_metric", values_to = "diversity") %>%
+  filter(site != "0")
+
+diversity_refs_summary <- diversity_refs %>%
+  group_by(diversity_metric) %>%
+  summarize(mean = mean(diversity), sdx2 = 2*sd(diversity), sd = sd(diversity)) %>%
+  mutate(low.limit = mean - sdx2, up.limit = mean + sdx2)
+
+diversity_refs_summary <- diversity_refs_summary %>%
+  filter(diversity_metric %in% c("Shannon", "Evenness", "richness"))
+
+#diversity and defo 
+plot_div_defo + geom_hline(data = diversity_refs_summary, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_summary, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+diversity_refs_evenness <- diversity_refs_summary %>%
+  filter(diversity_metric == "Evenness")
+
+diversity_refs_richness <- diversity_refs_summary %>%
+  filter(diversity_metric == "richness")
+
+diversity_refs_shannon <- diversity_refs_summary %>%
+  filter(diversity_metric == "Shannon")
+
+## Try this with the individual plots
+#diversity and defo 
+plot_even_ref <- plot_evenness_defo + geom_hline(data = diversity_refs_evenness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_evenness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+plot_rich_ref <- plot_richness_defo + geom_hline(data = diversity_refs_richness, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_richness, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+plot_shan_ref <- plot_shannon_defo + geom_hline(data = diversity_refs_shannon, aes(yintercept=mean), linetype="dashed", color = "red", size=1) + geom_rect(data = diversity_refs_shannon, mapping = aes(xmin=-Inf, xmax = Inf, ymin = low.limit, ymax = up.limit, x= NULL, y = NULL), alpha=.4, fill='grey') 
+
+## gg arrange for ABC labels
+final_diversity_plot <- ggarrange(plot_even_ref, plot_rich_ref, plot_shan_ref,
+        labels = c("A", "B", "C"),
+         font.label=list(size = 16, color = "black", face = "bold"),
+     common.legend = TRUE,
+         legend = "bottom",
+          #legend.grob = get_legend(p3),
+          ncol = 1, nrow = 3,
+        align = "hv") 
+
+final_diversity_plot
+
+```
