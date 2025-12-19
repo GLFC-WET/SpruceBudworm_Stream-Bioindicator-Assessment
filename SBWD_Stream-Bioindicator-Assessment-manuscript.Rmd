@@ -1303,57 +1303,8 @@ plot(mod, res.type="pit.norm", which=3, caption=c("Residuals vs Fitted", "Normal
 
 set.seed(123)  # reproducibility
 
-anova_res <- anova(mod_test, p.uni = "adjusted", nBoot = 999)
+anova_res <- anova(mod, p.uni = "adjusted", nBoot = 999)
 print(anova_res)
-
-library(broom) 
-
-coefs <- coef(mod)  
-
-effect_sizes <- data.frame(
-  taxon = colnames(coefs),
-  coef = coef(mod)["groupUndefoliated",]
-)
-
-anova_uni <- anova_res$uni.p
-effect_sizes$p <- anova_uni["group",]
-
-effect_sizes$signif <- cut(effect_sizes$p,
-   breaks = c(-Inf, 0.05, Inf),
-   labels = c("p < 0.05", "ns")
-)
-
-effect_sizes_sig <- effect_sizes %>%
-  filter(signif != "ns") %>%
-  arrange(desc(coef))
-
-effect_sizes_sig$taxon <- factor(effect_sizes_sig$taxon, levels = rev(effect_sizes_sig$taxon))
-
-effect_sizes_sig <- effect_sizes_sig %>%
-  mutate(Direction = ifelse(coef < 0, "Defo", "NonDefo"))
-
-effect_sizes_sig <- effect_sizes_sig %>%
-  filter(taxon != "unknown")
-
-lmmany_plot <- ggplot(effect_sizes_sig, aes(x = coef, y = taxon, fill = Direction)) +
-  geom_col(width = 0.7) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
-  scale_x_continuous(
-    name = "Effect size (difference in Hellinger-transformed abundance)") +
-   # limits = c(min_log_or, max_log_or),
-  #  breaks = seq(min_log_or, max_log_or, 1)
-#  ) +
-  scale_y_discrete(name = "Significant Taxa (p <0.05)") +
-  scale_fill_manual(values = c("Defo" = "#440154", "NonDefo" = "#b5de2b"), 
-                        labels = c("Defo" = "Defoliated", "NonDefo" = "Non-defoliated")) +
-  labs(
-  #  title = "Significant Taxa by Fisher's Exact Test",
-  # subtitle = paste("FDR-adjusted p-value <", alpha),
-    fill = "Site Type"
-  ) +
-  theme_minimal(base_size = 14) +  theme(legend.position = "bottom")
-
-lmmany_plot
 
 ```
 
@@ -1477,11 +1428,7 @@ gammaplot
 ```
 
 ### Differential Abundance Analysis
-
-- because this is morhpologically identified data and not microbial data, we can't use ANCOM or ALDEX (they are for compositional, genetic data)
-- the better otpion is mvabun::manyglm()
-- edgeR or DESeq2 can be also be used if taxa are reasonably abundant and not too zero inflated (not sure about using them for this case, pretty zero inflated when incorporating ref sites)
-- none of these 3 work with the very zero inflated data (especially with having many only found in ref sites and the unequal dispersion)
+- not really differential abundance becauese we are only interested in presence absence, but it is similar
 
 # try just fisher's exact 
 
