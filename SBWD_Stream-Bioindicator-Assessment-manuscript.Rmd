@@ -1269,14 +1269,14 @@ anosim_result <- anosim(dist_matrix, grouping = samples_all$Site_Type, permutati
 ```{r}
 
 # try mvabund 
-# this is not affected by dispersion, also gives us some individual taxa responses
-#couldnt use manyGLM because it only takes raw counts - need manyLM that allows for the transformed data 
+# this is not as affected by dispersion, also gives us some individual taxa responses
+#used manyGLM on raw counts. works best and meets all assumptions 
 
 library(mvabund)
 
 # samples in rows, species in cols 
 
-comm_mv <- mvabund(all_inverts_hel)
+comm_mv <- mvabund(round(all_inverts))
 
 summary(comm_mv)
 
@@ -1294,11 +1294,16 @@ sampleID <- sampleID %>%
 
 group <- factor(sampleID$Site_Type, levels = c("Defoliated", "Undefoliated"))
 
-mod <- manylm(comm_mv ~ group)
+mod <- manyglm(comm_mv ~ group)
+
+#check assumptions, all look good. just switch out which to 1:4
+plot(mod, res.type="pit.norm", which=3, caption=c("Residuals vs Fitted", "Normal Q-Q", 
+  "Scale-Location", "Cook's distance"), overlay=TRUE, 
+  n.vars=Inf, var.subset=NULL, sub.caption=NULL)
 
 set.seed(123)  # reproducibility
 
-anova_res <- anova(mod, p.uni = "adjusted", nBoot = 999)
+anova_res <- anova(mod_test, p.uni = "adjusted", nBoot = 999)
 print(anova_res)
 
 library(broom) 
@@ -1673,21 +1678,11 @@ Ref_watershed_charac <- read.csv("//132.156.200.8/WatershedEcol_b/wet_personal_w
 RefHabitat <- RefHabitat %>%
   left_join(Ref_watershed_charac, by = "site")
 
-### now there are several suspect entries in this dataset
-### run any analysis with and without them 
-### there are several depth values (mean and max) which are below 1.
-# confirmed with project lead that these were indeed reported as metres, but also rounded. they are going to provide us with updated data soon
-### also several bankful and wetted width values that are questionable (e.g. 25m bankful with wetted of 5 in one year and 13m bankful with 5 in next)
-
-### run analysis with and without suspect values 
-RefHabitat_confident <- RefHabitat %>%
-  filter(suspect == "no")
+### data has been updated with corrected depths from project lead
 
 ```
 
 ```{r}
-# confident reference habitat data we have 36 samples. full dataset is 51
-
 
 ## also pull in wetted width data for SBWD
 ###NOTE the temp at time of kick from the stage data was added to this spreadsheet for 2022 because we had no YSI data
@@ -1722,12 +1717,6 @@ SBWD_habitat_comparison <- SBWD_habitat_comparison %>%
 ### ok join things together 
 
 ```{r}
-RefHabitat_confident <- RefHabitat_confident %>%
-  dplyr::select(site, year, date.collected, flow_mean.m3s, wetted_width.m, depth_mean.m, pH, water_temp.C, Catchment_Area_km2, Elevation_Mean_metres, SpFir_Perc) %>%
-  rename(spfir = SpFir_Perc) %>%
-  rename(flow.m3s = flow_mean.m3s) %>%
-    mutate(SiteType = "NonDefo") %>%
-  mutate(date.collected = as.Date(date.collected))
 
 RefHabitat <- RefHabitat %>%
   dplyr::select(site, year, date.collected, flow_mean.m3s, wetted_width.m, depth_mean.m, pH, water_temp.C, Catchment_Area_km2, Elevation_Mean_metres, SpFir_Perc) %>%
@@ -1804,8 +1793,8 @@ loadings$env.variables <- row.names(loadings)
 loadings$pretty_label <- pretty_labels[loadings$env.variables]
 
 # need to adjust labels individually 
-loadings1 <- loadings %>%
-  filter(env.variables %in% c("wetted_width.m", "depth_mean.m", "Elevation_Mean_metres"))
+loading_depth <- loadings %>%
+  filter(env.variables == "depth_mean.m")
 
 loading_temp <- loadings %>%
   filter(env.variables == "water_temp.C")
@@ -1822,13 +1811,24 @@ loading_spfir <- loadings %>%
 loading_flow <- loadings %>%
   filter(env.variables == "flow.m3s")
 
+loading_width <- loadings %>%
+  filter(env.variables == "wetted_width.m")
+
+loading_elev <- loadings %>%
+  filter(env.variables == "Elevation_Mean_metres")
+
 ggplot() +
   geom_point(data = scores, aes(PC1, PC2,color = Site_Type, fill = Site_Type), size = 4) +
   geom_segment(data = loadings,
                aes(x = 0, y = 0, xend = PC1*2, yend = PC2*2),
                arrow = arrow(length = unit(0.25, "cm"))) +
   theme_minimal(base_size=16) + labs(x = x_lab, y = y_lab) + scale_color_manual(values = c("Defoliated" = "#440154", "Undefoliated" = "#b5de2b")) +
-  stat_ellipse(data = scores, aes(x = PC1, y = PC2, linetype = Site_Type, color = Site_Type), type = "norm", level = 0.95) + geom_text_repel(data = loadings1, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label), size =4) + geom_text(data = loading_temp, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = 0.1), size =4) + geom_text(data = loading_catch, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.7), size =4) + geom_text(data = loading_pH, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = -0.1), size =4) + geom_text(data = loading_spfir, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = 0.6), size =4) + geom_text(data = loading_flow, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.6), size =4)
+  stat_ellipse(data = scores, aes(x = PC1, y = PC2, linetype = Site_Type, color = Site_Type), type = "norm", level = 0.95) + 
+  geom_text(data = loading_elev, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = -0.1, nudge_x = -.3), size =4) +
+  geom_text(data = loading_depth, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = 0.4, nudge_y = -0.1), size =4) +
+  geom_text(data = loading_width, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.6, nudge_y = 0.1), size =4) +
+  geom_text(data = loading_temp, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = 0.1), size =4) + geom_text(data = loading_catch, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.8, nudge_y = 0.1), size =4) + geom_text(data = loading_pH, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_y = -0.1, nudge_x = 0.1), size =4) + 
+  geom_text(data = loading_spfir, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = 0.7, nudge_y = 0.1), size =4) + geom_text(data = loading_flow, aes(PC1*2, PC2*2, colour = "black", fontface = "bold", label = pretty_label, nudge_x = -0.6), size =4)
 
 ```
 
@@ -2030,7 +2030,7 @@ plot_evenness_defo <- mort_diversity %>%
         ggscatter(x = "cdefo5y", y = "diversity", color = "year", size = 4, shape = "mort_cat",
                   #add = "reg.line", conf.int = TRUE, , cor.coef.coord = c(3, 100)
                   cor.coef = FALSE, cor.method = "pearson", cor.coef.size = 5) + 
-  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01) +
+  stat_cor(cor.coef.name = "r",label.sep = ", ", r.accuracy = 0.01, p.accuracy = 0.01, label.y = 0.55) +
       facet_wrap(~year) + scale_color_brewer(palette = "Dark2") + labs(x = "Cumulative Defoliation", y = "Evenness") + theme_bw(base_size = 20) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
 panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), legend.position = "bottom") + scale_shape_manual(values = c("NoMort" = 16, "Mort" = 17, "LowMort" = 15),  labels = c("NoMort" = "< 10% Mortality", "LowMort" = "10 - 29.9% Mortality", "Mort" = "> 30% Mortality")) + 
   guides(color = guide_legend(title = "Year", nrow = 3, byrow = TRUE),
