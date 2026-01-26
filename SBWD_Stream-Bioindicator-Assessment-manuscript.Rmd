@@ -1273,7 +1273,7 @@ plot_pca_all1 <- plot_pca_all +
   stat_ellipse(data = samples_all, aes(x = PC1, y = PC2, linetype = Site_Type), colour = "black", type = "norm", level = 0.95) +
   guides(linetype = guide_legend(title = "Site Type")) +
   labs(x = x_lab, y = y_lab)  +
-  theme_minimal()  + theme(legend.position = "bottom",  legend.box = "vertical", legend.box.just = "left", panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+  theme_bw() + theme(legend.position = "bottom",  legend.box = "vertical", legend.box.just = "left", panel.grid.minor = element_blank(), panel.grid.major = element_blank())
 
 plot_pca_all1
 
@@ -1336,6 +1336,8 @@ group <- factor(sampleID$Site_Type, levels = c("Defoliated", "Undefoliated"))
 
 mod <- manyglm(comm_mv ~ group)
 
+summary(mod)
+anova(mod, p.uni = "adjusted")
 #check assumptions, all look good. just switch out which to 1:4
 plot(mod, res.type="pit.norm", which=1, caption=c("Residuals vs Fitted", "Normal Q-Q", 
   "Scale-Location", "Cook's distance"), overlay=TRUE, 
@@ -2128,7 +2130,7 @@ final_diversity_plot
 ### Export High Quality Figs
 
 ```{r}
-setwd("C:/Users/mmccaig/OneDrive - NRCan RNCan/Documents/GitHub/SpruceBudworm_Stream-Bioindicator-Assessment/FinalFigs/")
+setwd("C:/Users/mmccaig/OneDrive - NRCan RNCan/Documents/GitHub/SpruceBudworm_Stream-Bioindicator-Assessment/")
 
 ggsave("Fig1_BioindicatorPaper.jpg", plot = plot_pca_all1, width = 18.2, height = 20, dpi = 300, units = "cm", scale = .9, bg = "white")
 
